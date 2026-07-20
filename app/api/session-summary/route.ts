@@ -1,0 +1,52 @@
+import OpenAI from "openai";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import type { SessionSummary } from "@/lib/domain";
+import { summarizeWithRules } from "@/lib/session-engine";
+
+export const runtime = "nodejs";
+
+const eventSchema = z.object({ id: z.string(), type: z.enum(["monitoring_started", "motion_active", "settled", "camera_paused", "camera_resumed", "camera_stopped"]), occurredAt: z.string(), confidence: z.number().min(0).max(1), motionScore: z.number().optional(), message: z.string().max(120) });
+const bodySchema = z.object({ dogName: z.string().max(60), targetMinutes: z.number().int().min(1).max(60), startedAt: z.number(), events: z.array(eventSchema).max(100) });
+
+const globalBudget = globalThis as typeof globalThis & { pawlyAiSpend?: number; pawlyAiRequests?: Map<string, { date: string; count: number }> };
+globalBudget.pawlyAiSpend ??= 0;
+globalBudget.pawlyAiRequests ??= new Map();
+
+export async function POST(request: Request) {
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "Invalid session" }, { status: 400 });
+  const fallback = summarizeWithRules(parsed.data.events, parsed.data.startedAt);
+
+  if (process.env.AI_FEATURE_ENABLED !== "true" || !process.env.OPENAI_API_KEY) return NextResponse.json(fallback);
+
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "local";
+  const today = new Date().toISOString().slice(0, 10);
+  const record = globalBudget.pawlyAiRequests!.get(ip);
+  const count = record?.date === today ? record.count : 0;
+  const dailyLimit = Number(process.env.AI_DAILY_REQUEST_LIMIT ?? 20);
+  const monthlyBudget = Number(process.env.AI_MONTHLY_BUDGET_USD ?? 5);
+  if (count >= dailyLimit || globalBudget.pawlyAiSpend! >= monthlyBudget) return NextResponse.json({ ...fallback, budgetLimited: true });
+
+  const compactEvents = parsed.data.events.map(({ type, occurredAt, confidence }) => ({ type, occurredAt, confidence }));
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  try {
+    const response = await client.responses.create({
+      model: process.env.OPENAI_MODEL ?? "gpt-5.6-luna",
+      reasoning: { effort: "none" },
+      max_output_tokens: 300,
+      store: false,
+      input: `You are a cautious puppy alone-time session summarizer. Use only the event observations provided. Do not diagnose emotion, health, or separation anxiety. Give one brief headline and one conservative next step. Never recommend increasing duration by more than 15%. Dog: ${parsed.data.dogName}. Target: ${parsed.data.targetMinutes} minutes. Events: ${JSON.stringify(compactEvents)}`,
+      text: { format: { type: "json_schema", name: "pawly_session_summary", strict: true, schema: { type: "object", additionalProperties: false, properties: { headline: { type: "string" }, nextStep: { type: "string" } }, required: ["headline", "nextStep"] } } },
+    });
+    const result = JSON.parse(response.output_text) as Pick<SessionSummary, "headline" | "nextStep">;
+    const inputTokens = response.usage?.input_tokens ?? 0;
+    const outputTokens = response.usage?.output_tokens ?? 0;
+    const estimatedAiCostUsd = inputTokens / 1_000_000 + (outputTokens * 6) / 1_000_000;
+    globalBudget.pawlyAiSpend! += estimatedAiCostUsd;
+    globalBudget.pawlyAiRequests!.set(ip, { date: today, count: count + 1 });
+    return NextResponse.json({ ...fallback, ...result, source: "openai", estimatedAiCostUsd });
+  } catch {
+    return NextResponse.json(fallback);
+  }
+}
