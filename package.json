@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "postbuild": "node scripts/copy-hosting-config.mjs",
     "start": "vinext start",
     "check": "tsc --noEmit",
     "build:next": "next build"
