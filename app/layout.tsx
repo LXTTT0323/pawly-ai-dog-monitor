@@ -1,9 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Manrope, Newsreader } from "next/font/google";
 import "./globals.css";
-
-const manrope = Manrope({ subsets: ["latin"], variable: "--font-sans" });
-const newsreader = Newsreader({ subsets: ["latin"], variable: "--font-serif" });
 
 export const metadata: Metadata = {
   title: { default: "Pawly Coach", template: "%s · Pawly Coach" },
@@ -18,7 +14,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className={`${manrope.variable} ${newsreader.variable}`}>{children}</body>
+      <body>{children}</body>
     </html>
   );
 }

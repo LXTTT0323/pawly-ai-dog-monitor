@@ -16,7 +16,7 @@ globalBudget.pawlyAiRequests ??= new Map();
 export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid session" }, { status: 400 });
-  const fallback = summarizeWithRules(parsed.data.events, parsed.data.startedAt);
+  const fallback = summarizeWithRules(parsed.data.events, parsed.data.startedAt, Date.now(), parsed.data.targetMinutes);
 
   if (process.env.AI_FEATURE_ENABLED !== "true" || !process.env.OPENAI_API_KEY) return NextResponse.json(fallback);
 

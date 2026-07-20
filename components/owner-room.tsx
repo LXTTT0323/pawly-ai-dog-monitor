@@ -63,7 +63,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const [label, sublabel] = stateCopy[state];
 
   const finishSession = async (useAi: boolean) => {
-    const rulesSummary = summarizeWithRules(events, startedAt);
+    const rulesSummary = summarizeWithRules(events, startedAt, Date.now(), targetMinutes);
     if (!useAi) { setSummary(rulesSummary); return; }
     setSummaryLoading(true);
     try {

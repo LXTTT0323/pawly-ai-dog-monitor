@@ -2,19 +2,25 @@
   "name": "pawly-coach",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "check": "tsc --noEmit"
+    "dev": "vinext dev",
+    "build": "vinext build",
+    "start": "vinext start",
+    "check": "tsc --noEmit",
+    "build:next": "next build"
   },
   "dependencies": {
+    "@vitejs/plugin-rsc": "^0.5.28",
     "livekit-client": "^2.17.1",
     "livekit-server-sdk": "^2.13.3",
     "next": "16.2.10",
     "openai": "^6.16.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "react-server-dom-webpack": "19.2.7",
+    "vinext": "1.0.0-beta.2",
+    "vite": "8.1.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -13,6 +13,7 @@ export function summarizeWithRules(
   events: PawlyEvent[],
   startedAt: number,
   endedAt = Date.now(),
+  targetMinutes?: number,
 ): SessionSummary {
   const totalMinutes = Math.max(1, Math.round((endedAt - startedAt) / 60000));
   const activeEvents = events.filter((event) => event.type === "motion_active").length;
@@ -22,12 +23,13 @@ export function summarizeWithRules(
   const estimatedActiveMinutes = Math.min(totalMinutes, Math.ceil(activeEvents * 0.5));
   const calmMinutes = Math.max(0, totalMinutes - estimatedActiveMinutes);
   const calmRatio = calmMinutes / totalMinutes;
+  const nextDurationBase = targetMinutes ?? totalMinutes;
 
   let nextStep = "Repeat the same duration once more before increasing it.";
   if (!unavailable && calmRatio >= 0.8 && activeEvents <= 2) {
-    nextStep = `Try ${Math.min(totalMinutes + 1, Math.ceil(totalMinutes * 1.15))} minutes next time.`;
+    nextStep = `Try ${Math.min(60, nextDurationBase + 1, Math.ceil(nextDurationBase * 1.15))} minutes next time.`;
   } else if (activeEvents >= 5) {
-    nextStep = `Reduce the next session to ${Math.max(1, Math.floor(totalMinutes * 0.75))} minutes.`;
+    nextStep = `Reduce the next session to ${Math.max(1, Math.floor(nextDurationBase * 0.75))} minutes.`;
   }
 
   return {
