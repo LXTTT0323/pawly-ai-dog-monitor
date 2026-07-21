@@ -12,6 +12,10 @@ import { startMotionAnalyzer } from "@/lib/motion-analyzer";
 
 interface Props { roomCode: string; }
 
+interface ZoomRange { min: number; max: number; step?: number; }
+interface ZoomCapabilities extends MediaTrackCapabilities { zoom?: ZoomRange; }
+interface ZoomSettings extends MediaTrackSettings { zoom?: number; }
+
 function cameraErrorMessage(cause: unknown) {
   if (!(cause instanceof Error)) return "The camera could not start. Reload this page and try again.";
   if (cause.name === "NotAllowedError") return "Camera access is blocked for this site. Open the browser's site settings, allow Camera, then try again.";
@@ -51,6 +55,34 @@ export function CameraStation({ roomCode }: Props) {
     const event: PawlyEvent = { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), confidence: confidenceOverride ?? (type === "motion_active" ? 0.72 : 0.95), motionScore: score, message: eventMessage(type) };
     await room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(event)), { reliable: true, topic: "pawly-event" });
   }, []);
+
+  const publishZoomStatus = useCallback(async (supported: boolean, zoom = 1, range?: ZoomRange) => {
+    const room = roomRef.current;
+    if (!room?.localParticipant) return;
+    await room.localParticipant.publishData(
+      new TextEncoder().encode(JSON.stringify({ type: "zoom_status", supported, zoom, min: range?.min ?? 1, max: range?.max ?? 3 })),
+      { reliable: true, topic: "pawly-camera-status" },
+    );
+  }, []);
+
+  const applyCameraZoom = useCallback(async (requestedZoom: number) => {
+    const mediaTrack = roomRef.current?.localParticipant.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack;
+    if (!mediaTrack) return;
+    const range = (mediaTrack.getCapabilities() as ZoomCapabilities).zoom;
+    if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max)) {
+      await publishZoomStatus(false);
+      return;
+    }
+    const clamped = Math.min(range.max, Math.max(range.min, requestedZoom));
+    const stepped = range.step ? range.min + Math.round((clamped - range.min) / range.step) * range.step : clamped;
+    try {
+      await mediaTrack.applyConstraints({ advanced: [{ zoom: stepped } as MediaTrackConstraintSet] });
+      const applied = (mediaTrack.getSettings() as ZoomSettings).zoom ?? stepped;
+      await publishZoomStatus(true, applied, range);
+    } catch {
+      await publishZoomStatus(false);
+    }
+  }, [publishZoomStatus]);
 
   const sendClip = useCallback(async (clip: SavedClip, destinationIdentities?: string[]) => {
     const room = roomRef.current;
@@ -164,9 +196,10 @@ export function CameraStation({ roomCode }: Props) {
       room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
         if (topic !== "pawly-command") return;
         try {
-          const command = JSON.parse(new TextDecoder().decode(payload)) as { type?: string };
+          const command = JSON.parse(new TextDecoder().decode(payload)) as { type?: string; zoom?: number };
           if (command.type === "wake_display") wakeDisplay();
           if (command.type === "request_saved_clips") void sendSavedClips(participant?.identity);
+          if (command.type === "set_zoom" && Number.isFinite(command.zoom)) void applyCameraZoom(command.zoom ?? 1);
         } catch { /* Ignore malformed remote commands. */ }
       });
       await room.connect(serverUrl, token);
@@ -179,6 +212,7 @@ export function CameraStation({ roomCode }: Props) {
       }
       const publication = room.localParticipant.getTrackPublication(Track.Source.Camera);
       if (videoRef.current && publication?.track) publication.track.attach(videoRef.current);
+      void applyCameraZoom(1);
       await requestWakeLock();
       setStatus("live");
       wakeDisplay(30_000);
@@ -188,7 +222,7 @@ export function CameraStation({ roomCode }: Props) {
       roomRef.current?.disconnect(); roomRef.current = null;
       setError(cameraErrorMessage(cause)); setStatus("error");
     }
-  }, [enableAudio, publishEvent, requestWakeLock, roomCode, sendSavedClips, wakeDisplay]);
+  }, [applyCameraZoom, enableAudio, publishEvent, requestWakeLock, roomCode, sendSavedClips, wakeDisplay]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;

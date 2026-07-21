@@ -27,7 +27,7 @@ export default function Home() {
           <div className="orb orb-one" /><div className="orb orb-two" />
           <div className="device-card outing-card">
             <div className="device-top"><span>Joey&apos;s room</span><span className="live-pill">● AI WATCHING</span></div>
-            <div className="camera-scene"><div className="window-light" /><div className="rug" /><div className="dog-shape"><span className="dog-ear left" /><span className="dog-ear right" /><span className="dog-body" /></div><div className="calm-label"><span>●</span><div><strong>Dog visible</strong><small>92% confidence</small></div></div><div className="scene-sound">♪ Sound on</div></div>
+            <div className="camera-scene"><img className="hero-puppy-art" src="/pawly-puppy-room.png" alt="A cozy puppy resting calmly on a rug" /><div className="camera-scene-shade" /><div className="calm-label"><span>●</span><div><strong>Dog visible</strong><small>92% confidence</small></div></div><div className="scene-sound">♪ Sound on</div></div>
             <div className="device-stats outing-stats"><div><small>Observed</small><strong>3 hr 12 min</strong></div><div><small>First activity</small><strong>42 min</strong></div><div className="trend"><small>Longest settled</small><strong>1 hr 18 min</strong></div></div>
           </div>
           <div className="floating-note outing-note"><span>✓</span><div><strong>Settled again</strong><small>After a 4-minute active period.</small></div></div>

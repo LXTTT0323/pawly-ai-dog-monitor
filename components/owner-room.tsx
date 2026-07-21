@@ -9,6 +9,7 @@ import type { PawlyEvent, SessionKind, SessionSummary } from "@/lib/domain";
 import { deriveState, summarizeWithRules } from "@/lib/session-engine";
 
 interface Props { roomCode: string; }
+type ZoomMode = "checking" | "camera" | "view";
 
 const stateCopy = { calm: ["Calm", "The room has settled"], active: ["Active", "A sustained change was noticed"], out_of_view: ["Out of view", "The camera is still online"], unavailable: ["Unavailable", "The camera needs attention"], connecting: ["Connecting", "Looking for the camera"] } as const;
 const durationOptions: Record<SessionKind, number[]> = {
@@ -66,6 +67,9 @@ export function OwnerRoom({ roomCode }: Props) {
   const [listening, setListening] = useState(false);
   const [clips, setClips] = useState<SavedClip[]>([]);
   const [clipReceiveProgress, setClipReceiveProgress] = useState<number | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [zoomMode, setZoomMode] = useState<ZoomMode>("checking");
+  const [zoomBounds, setZoomBounds] = useState({ min: 1, max: 3 });
   const state = deriveState(events, connected);
 
   const refreshClips = useCallback(async () => {
@@ -86,6 +90,10 @@ export function OwnerRoom({ roomCode }: Props) {
         new TextEncoder().encode(JSON.stringify({ type: "request_saved_clips" })),
         { reliable: true, topic: "pawly-command" },
       );
+      const requestCameraZoom = () => room.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify({ type: "set_zoom", zoom: 1 })),
+        { reliable: true, topic: "pawly-command" },
+      );
       room.registerByteStreamHandler("pawly-clip", (reader) => {
         reader.onProgress = (progress) => setClipReceiveProgress(progress ?? 0);
         void reader.readAll().then(async (chunks) => {
@@ -102,6 +110,17 @@ export function OwnerRoom({ roomCode }: Props) {
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); } track.detach(); });
       room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+        if (topic === "pawly-camera-status") {
+          try {
+            const status = JSON.parse(new TextDecoder().decode(payload)) as { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number };
+            if (status.type === "zoom_status") {
+              setZoomMode(status.supported ? "camera" : "view");
+              if (status.supported && Number.isFinite(status.zoom)) setZoom(status.zoom ?? 1);
+              if (status.supported && Number.isFinite(status.min) && Number.isFinite(status.max)) setZoomBounds({ min: status.min ?? 1, max: status.max ?? 3 });
+            }
+          } catch { /* ignore malformed camera status */ }
+          return;
+        }
         if (topic !== "pawly-event") return;
         try {
           const event = JSON.parse(new TextDecoder().decode(payload)) as PawlyEvent;
@@ -110,12 +129,12 @@ export function OwnerRoom({ roomCode }: Props) {
           if (document.hidden && noteworthy && Notification.permission === "granted") new Notification(event.message, { body: "Open Pawly to check the room timeline." });
         } catch { /* ignore malformed participant data */ }
       });
-      room.on(RoomEvent.ParticipantConnected, () => { setConnected(true); void requestSavedClips(); });
+      room.on(RoomEvent.ParticipantConnected, () => { setConnected(true); setZoomMode("checking"); void requestSavedClips(); void requestCameraZoom(); });
       room.on(RoomEvent.ParticipantDisconnected, () => setConnected(room.remoteParticipants.size > 0));
       room.on(RoomEvent.Disconnected, () => setConnected(false));
       await room.connect(serverUrl, token);
       setConnected(room.remoteParticipants.size > 0);
-      if (room.remoteParticipants.size > 0) void requestSavedClips();
+      if (room.remoteParticipants.size > 0) { void requestSavedClips(); void requestCameraZoom(); }
       for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) {
         if (publication.track?.kind === Track.Kind.Video && videoRef.current) publication.track.attach(videoRef.current);
         if (publication.track?.kind === Track.Kind.Audio && audioRef.current) { publication.track.attach(audioRef.current); setRemoteAudioAvailable(true); }
@@ -129,6 +148,11 @@ export function OwnerRoom({ roomCode }: Props) {
     void connect();
     return () => { void roomRef.current?.disconnect(); };
   }, [connect]);
+  useEffect(() => {
+    if (!connected || zoomMode !== "checking") return;
+    const timer = window.setTimeout(() => setZoomMode((current) => current === "checking" ? "view" : current), 2_500);
+    return () => window.clearTimeout(timer);
+  }, [connected, zoomMode]);
   useEffect(() => { const timer = window.setInterval(() => setElapsed(Date.now() - startedAt), 1000); return () => window.clearInterval(timer); }, [startedAt]);
 
   const sessionTime = useMemo(() => `${String(Math.floor(elapsed / 60000)).padStart(2, "0")}:${String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0")}`, [elapsed]);
@@ -166,6 +190,19 @@ export function OwnerRoom({ roomCode }: Props) {
     window.setTimeout(() => setWakeSent(false), 2500);
   };
 
+  const changeZoom = async (direction: -1 | 1) => {
+    const lower = zoomMode === "camera" ? zoomBounds.min : 1;
+    const upper = zoomMode === "camera" ? zoomBounds.max : 3;
+    const nextZoom = Math.min(upper, Math.max(lower, Math.round((zoom + direction * 0.5) * 10) / 10));
+    setZoom(nextZoom);
+    const room = roomRef.current;
+    if (!room || !connected) return;
+    await room.localParticipant.publishData(
+      new TextEncoder().encode(JSON.stringify({ type: "set_zoom", zoom: nextZoom })),
+      { reliable: true, topic: "pawly-command" },
+    );
+  };
+
   const removeClip = async (id: string) => {
     await deleteClip(id);
     await refreshClips();
@@ -178,7 +215,7 @@ export function OwnerRoom({ roomCode }: Props) {
     <div className="dashboard-grid">
       <section className="live-panel">
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><code>{roomCode}</code></div>
-        <div className="owner-video"><video ref={videoRef} autoPlay playsInline /><audio ref={audioRef} autoPlay />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{remoteAudioAvailable && !listening && <button className="listen-room-button" onClick={() => void enableListening()}>♪ Tap to hear the room</button>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
+        <div className="owner-video"><video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} /><audio ref={audioRef} autoPlay />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}{remoteAudioAvailable && !listening && <button className="listen-room-button" onClick={() => void enableListening()}>♪ Tap to hear the room</button>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
         {error && <p className="error-banner">{error}</p>}
         <div className="session-bar">
           <div><small>Observed</small><strong>{sessionTime}</strong></div>
