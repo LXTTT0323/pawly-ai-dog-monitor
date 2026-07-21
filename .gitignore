@@ -4,6 +4,7 @@ node_modules
 .vercel
 .env
 .env.local
+.env*
 coverage
 *.log
 *-smoke.png
