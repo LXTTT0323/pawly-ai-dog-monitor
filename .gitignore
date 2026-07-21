@@ -1,6 +1,7 @@
 .next
 dist
 node_modules
+.vercel
 .env
 .env.local
 coverage
