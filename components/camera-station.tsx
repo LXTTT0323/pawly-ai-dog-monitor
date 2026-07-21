@@ -55,13 +55,13 @@ export function CameraStation({ roomCode }: Props) {
   const wakeDisplay = useCallback((returnToStandbyAfterMs = 60_000) => {
     clearStandbyTimer();
     setStandby(false);
-    setAudioEnabled(false);
     standbyTimerRef.current = window.setTimeout(() => setStandby(true), returnToStandbyAfterMs);
   }, [clearStandbyTimer]);
 
   const stop = useCallback(async () => {
     clearStandbyTimer();
     setStandby(false);
+    setAudioEnabled(false);
     await publishEvent("camera_stopped");
     roomRef.current?.disconnect();
     roomRef.current = null;
