@@ -7,6 +7,14 @@ import { startMotionAnalyzer } from "@/lib/motion-analyzer";
 
 interface Props { roomCode: string; }
 
+function cameraErrorMessage(cause: unknown) {
+  if (!(cause instanceof Error)) return "The camera could not start. Reload this page and try again.";
+  if (cause.name === "NotAllowedError") return "Camera access is blocked for this site. Open the browser's site settings, allow Camera, then try again.";
+  if (cause.name === "NotFoundError") return "No usable camera was found on this device.";
+  if (cause.name === "NotReadableError") return "The camera is busy in another app. Close FaceTime or other camera apps, then try again.";
+  return cause.message || "The camera could not start. Reload this page and try again.";
+}
+
 export function CameraStation({ roomCode }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const roomRef = useRef<Room | null>(null);
@@ -15,6 +23,7 @@ export function CameraStation({ roomCode }: Props) {
   const [status, setStatus] = useState<"idle" | "connecting" | "live" | "error">("idle");
   const [standby, setStandby] = useState(false);
   const [error, setError] = useState("");
+  const [audioEnabled, setAudioEnabled] = useState(false);
   const [motionScore, setMotionScore] = useState(0);
   const lastStateRef = useRef<"active" | "settled">("settled");
   const sustainedRef = useRef({ active: 0, settled: 0 });
@@ -30,7 +39,7 @@ export function CameraStation({ roomCode }: Props) {
     try {
       const nav = navigator as Navigator & { wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> } };
       wakeLockRef.current = nav.wakeLock ? await nav.wakeLock.request("screen") : null;
-    } catch { /* iPad can deny wake lock; UI already explains the fallback. */ }
+    } catch { /* Some browsers deny wake lock; the UI already explains the fallback. */ }
   }, []);
 
   const clearStandbyTimer = useCallback(() => {
@@ -46,6 +55,7 @@ export function CameraStation({ roomCode }: Props) {
   const wakeDisplay = useCallback((returnToStandbyAfterMs = 60_000) => {
     clearStandbyTimer();
     setStandby(false);
+    setAudioEnabled(false);
     standbyTimerRef.current = window.setTimeout(() => setStandby(true), returnToStandbyAfterMs);
   }, [clearStandbyTimer]);
 
@@ -76,17 +86,26 @@ export function CameraStation({ roomCode }: Props) {
         } catch { /* Ignore malformed remote commands. */ }
       });
       await room.connect(serverUrl, token);
-      await room.localParticipant.setCameraEnabled(true, { facingMode: "environment", resolution: { width: 1280, height: 720, frameRate: 20 } });
-      await room.localParticipant.setMicrophoneEnabled(true, { echoCancellation: true, noiseSuppression: true });
+      try {
+        await room.localParticipant.setCameraEnabled(true, { facingMode: "environment" });
+      } catch {
+        // Desktop cameras and some iOS browsers reject a rear-camera preference.
+        // Retry with the device default instead of failing the whole session.
+        await room.localParticipant.setCameraEnabled(true);
+      }
       const publication = room.localParticipant.getTrackPublication(Track.Source.Camera);
       if (videoRef.current && publication?.track) publication.track.attach(videoRef.current);
       await requestWakeLock();
       setStatus("live");
       wakeDisplay(30_000);
       await publishEvent("monitoring_started");
+      void room.localParticipant
+        .setMicrophoneEnabled(true, { echoCancellation: true, noiseSuppression: true })
+        .then(() => setAudioEnabled(true))
+        .catch(() => setAudioEnabled(false));
     } catch (cause) {
       roomRef.current?.disconnect(); roomRef.current = null;
-      setError(cause instanceof Error ? cause.message : "Camera could not start"); setStatus("error");
+      setError(cameraErrorMessage(cause)); setStatus("error");
     }
   }, [publishEvent, requestWakeLock, roomCode, wakeDisplay]);
 
@@ -116,10 +135,10 @@ export function CameraStation({ roomCode }: Props) {
   }, [clearStandbyTimer]);
 
   return <div className="camera-station">
-    <div className="camera-header"><div><span className={`status-dot ${status}`} /><strong>{status === "live" ? "Monitoring live" : status === "connecting" ? "Opening room…" : "Camera ready"}</strong></div><code>{roomCode}</code></div>
-    <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span>Motion gate</span><strong>{Math.round(motionScore * 100)}%</strong></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place the iPad where the floor, bed, or crate is visible. Keep it plugged in and this page open.</p>{status === "error" && <p className="error-text">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : "Allow camera & start"}</button></div>}</div>
-    {status === "live" && <div className="camera-controls"><div><strong>Dark standby keeps monitoring active</strong><span>Do not lock the iPad—Pawly blacks out this page instead.</span></div><div className="camera-control-actions"><button className="button button-ghost camera-standby-button" onClick={enterStandby}>Dark standby now</button><button className="button button-danger" onClick={stop}>Stop monitoring</button></div></div>}
-    <p className="camera-privacy">Live stream only · no continuous recording · local motion gate</p>
-    {status === "live" && standby && <button className="standby-screen" onClick={() => wakeDisplay()} aria-label="Wake the iPad monitoring display"><span className="standby-dot" /><strong>Pawly is monitoring</strong><small>Tap anywhere to show the camera for 60 seconds</small></button>}
+    <div className="camera-header"><div><span className={`status-dot ${status}`} /><strong>{status === "live" ? "Monitoring live" : status === "connecting" ? "Opening room…" : status === "error" ? "Camera needs attention" : "Camera ready"}</strong></div><code>{roomCode}</code></div>
+    <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span>Motion gate</span><strong>{Math.round(motionScore * 100)}%</strong></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place this device where the floor, bed, or crate is visible. Keep it plugged in and this page open.</p>{status === "error" && <p className="error-text" role="alert">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : status === "error" ? "Try camera again" : "Allow camera & start"}</button></div>}</div>
+    {status === "live" && <div className="camera-controls"><div><strong>Dark standby keeps monitoring active</strong><span>Do not lock this device—Pawly blacks out the page instead.</span></div><div className="camera-control-actions"><button className="button button-ghost camera-standby-button" onClick={enterStandby}>Dark standby now</button><button className="button button-danger" onClick={stop}>Stop monitoring</button></div></div>}
+    <p className="camera-privacy">Live video · {audioEnabled ? "audio on" : "audio optional"} · no continuous recording · local motion gate</p>
+    {status === "live" && standby && <button className="standby-screen" onClick={() => wakeDisplay()} aria-label="Wake the camera monitoring display"><span className="standby-dot" /><strong>Pawly is monitoring</strong><small>Tap anywhere to show the camera for 60 seconds</small></button>}
   </div>;
 }
