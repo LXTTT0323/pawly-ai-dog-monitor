@@ -8,7 +8,7 @@
     "build": "vinext build",
     "postbuild": "node scripts/copy-hosting-config.mjs",
     "start": "vinext start",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit -p tsconfig.check.json",
     "build:next": "next build"
   },
   "dependencies": {

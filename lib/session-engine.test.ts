@@ -19,18 +19,37 @@ describe("session engine", () => {
     expect(deriveState([event("camera_paused")], true)).toBe("unavailable");
   });
 
-  it("keeps duration increases conservative", () => {
+  it("suggests meaningful quick-check steps instead of one-minute increments", () => {
     const summary = summarizeWithRules(
       [event("settled")],
       Date.now() - 10 * 60000,
       Date.now(),
+      10,
+      "quick_check",
     );
-    expect(summary.nextStep).toContain("11 minutes");
+    expect(summary.nextStep).toContain("15-minute");
   });
 
-  it("reduces the next duration after repeated motion", () => {
+  it("does not prescribe a shorter real-world outing from motion alone", () => {
     const events = Array.from({ length: 6 }, (_, index) => event("motion_active", index));
-    const summary = summarizeWithRules(events, Date.now() - 12 * 60000, Date.now());
-    expect(summary.nextStep).toContain("9 minutes");
+    const summary = summarizeWithRules(
+      events,
+      Date.now() - 180 * 60000,
+      Date.now(),
+      180,
+      "away_monitoring",
+    );
+    expect(summary.nextStep).toContain("next outing of a similar length");
+  });
+
+  it("measures the first activity transition and longest calm span", () => {
+    const now = Date.now();
+    const events: PawlyEvent[] = [
+      { ...event("motion_active"), occurredAt: new Date(now - 40 * 60000).toISOString() },
+      { ...event("settled"), occurredAt: new Date(now - 30 * 60000).toISOString() },
+    ];
+    const summary = summarizeWithRules(events, now - 60 * 60000, now, 60);
+    expect(summary.firstActivityMinute).toBe(20);
+    expect(summary.longestCalmMinutes).toBe(30);
   });
 });

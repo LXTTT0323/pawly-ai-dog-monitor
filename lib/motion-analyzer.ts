@@ -1,7 +1,11 @@
 export interface MotionReading {
   score: number;
   active: boolean;
+  intervalMs: number;
 }
+
+const CALM_INTERVAL_MS = 2_000;
+const ACTIVE_INTERVAL_MS = 750;
 
 export function startMotionAnalyzer(
   video: HTMLVideoElement,
@@ -13,6 +17,8 @@ export function startMotionAnalyzer(
   const context = canvas.getContext("2d", { willReadFrequently: true });
   let previous: Uint8ClampedArray | null = null;
   let cancelled = false;
+  let timer: number | null = null;
+  let nextIntervalMs = CALM_INTERVAL_MS;
 
   const tick = () => {
     if (cancelled || !context) return;
@@ -29,15 +35,18 @@ export function startMotionAnalyzer(
 
       if (previous) {
         const score = totalDifference / grayscale.length / 255;
-        onReading({ score, active: score > 0.065 });
+        const active = score > 0.065;
+        onReading({ score, active, intervalMs: nextIntervalMs });
+        nextIntervalMs = active ? ACTIVE_INTERVAL_MS : CALM_INTERVAL_MS;
       }
       previous = grayscale;
     }
+    timer = window.setTimeout(tick, nextIntervalMs);
   };
 
-  const interval = window.setInterval(tick, 1000);
+  timer = window.setTimeout(tick, 250);
   return () => {
     cancelled = true;
-    window.clearInterval(interval);
+    if (timer != null) window.clearTimeout(timer);
   };
 }

@@ -26,7 +26,7 @@ export function CameraStation({ roomCode }: Props) {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [motionScore, setMotionScore] = useState(0);
   const lastStateRef = useRef<"active" | "settled">("settled");
-  const sustainedRef = useRef({ active: 0, settled: 0 });
+  const sustainedRef = useRef({ activeMs: 0, settledMs: 0 });
 
   const publishEvent = useCallback(async (type: EventType, score?: number) => {
     const room = roomRef.current;
@@ -111,12 +111,12 @@ export function CameraStation({ roomCode }: Props) {
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
-    return startMotionAnalyzer(videoRef.current, ({ score, active }) => {
+    return startMotionAnalyzer(videoRef.current, ({ score, active, intervalMs }) => {
       setMotionScore(score);
-      if (active) { sustainedRef.current.active += 1; sustainedRef.current.settled = 0; }
-      else { sustainedRef.current.settled += 1; sustainedRef.current.active = 0; }
-      if (sustainedRef.current.active >= 3 && lastStateRef.current !== "active") { lastStateRef.current = "active"; void publishEvent("motion_active", score); }
-      if (sustainedRef.current.settled >= 8 && lastStateRef.current !== "settled") { lastStateRef.current = "settled"; void publishEvent("settled", score); }
+      if (active) { sustainedRef.current.activeMs += intervalMs; sustainedRef.current.settledMs = 0; }
+      else { sustainedRef.current.settledMs += intervalMs; sustainedRef.current.activeMs = 0; }
+      if (sustainedRef.current.activeMs >= 2_250 && lastStateRef.current !== "active") { lastStateRef.current = "active"; void publishEvent("motion_active", score); }
+      if (sustainedRef.current.settledMs >= 12_000 && lastStateRef.current !== "settled") { lastStateRef.current = "settled"; void publishEvent("settled", score); }
     });
   }, [publishEvent, status]);
 

@@ -8,6 +8,8 @@ export type EventType =
 
 export type BehaviorState = "calm" | "active" | "unavailable" | "connecting";
 
+export type SessionKind = "quick_check" | "away_monitoring";
+
 export interface PawlyEvent {
   id: string;
   type: EventType;
@@ -19,9 +21,11 @@ export interface PawlyEvent {
 
 export interface SessionSummary {
   headline: string;
+  observedMinutes: number;
   calmMinutes: number;
   activeEvents: number;
   longestCalmMinutes: number;
+  firstActivityMinute: number | null;
   nextStep: string;
   source: "rules" | "openai";
   estimatedAiCostUsd?: number;

@@ -4,12 +4,23 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Brand } from "./brand";
-import type { PawlyEvent, SessionSummary } from "@/lib/domain";
+import type { PawlyEvent, SessionKind, SessionSummary } from "@/lib/domain";
 import { deriveState, summarizeWithRules } from "@/lib/session-engine";
 
 interface Props { roomCode: string; }
 
 const stateCopy = { calm: ["Calm", "The room has settled"], active: ["Active", "Movement is elevated"], unavailable: ["Unavailable", "The camera needs attention"], connecting: ["Connecting", "Looking for the camera"] } as const;
+const durationOptions: Record<SessionKind, number[]> = {
+  quick_check: [10, 15, 20, 30],
+  away_monitoring: [30, 60, 120, 180, 240],
+};
+
+function durationLabel(minutes: number) {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
+}
 
 export function OwnerRoom({ roomCode }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -18,7 +29,8 @@ export function OwnerRoom({ roomCode }: Props) {
   const [events, setEvents] = useState<PawlyEvent[]>([]);
   const [error, setError] = useState("");
   const [startedAt, setStartedAt] = useState(() => Date.now());
-  const [targetMinutes, setTargetMinutes] = useState(5);
+  const [sessionKind, setSessionKind] = useState<SessionKind>("away_monitoring");
+  const [targetMinutes, setTargetMinutes] = useState(180);
   const [elapsed, setElapsed] = useState(0);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -64,11 +76,11 @@ export function OwnerRoom({ roomCode }: Props) {
   const [label, sublabel] = stateCopy[state];
 
   const finishSession = async (useAi: boolean) => {
-    const rulesSummary = summarizeWithRules(events, startedAt, Date.now(), targetMinutes);
+    const rulesSummary = summarizeWithRules(events, startedAt, Date.now(), targetMinutes, sessionKind);
     if (!useAi) { setSummary(rulesSummary); return; }
     setSummaryLoading(true);
     try {
-      const response = await fetch("/api/session-summary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dogName: "Your puppy", targetMinutes, startedAt, events }) });
+      const response = await fetch("/api/session-summary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dogName: "Your puppy", sessionKind, targetMinutes, startedAt, events }) });
       if (!response.ok) throw new Error("AI summary unavailable");
       setSummary(await response.json());
     } catch { setSummary(rulesSummary); } finally { setSummaryLoading(false); }
@@ -94,7 +106,15 @@ export function OwnerRoom({ roomCode }: Props) {
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><code>{roomCode}</code></div>
         <div className="owner-video"><video ref={videoRef} autoPlay playsInline />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
         {error && <p className="error-banner">{error}</p>}
-        <div className="session-bar"><div><small>Session</small><strong>{sessionTime}</strong></div><div className="target-control"><small>Target</small><button onClick={() => setTargetMinutes(Math.max(1, targetMinutes - 1))}>−</button><strong>{targetMinutes} min</strong><button onClick={() => setTargetMinutes(Math.min(60, targetMinutes + 1))}>+</button></div><button className="button button-ghost wake-ipad-button" onClick={() => void wakeIpadDisplay()} disabled={!connected}>{wakeSent ? "Display awake for 60s" : "Wake camera display"}</button><button className="button button-dark" onClick={() => void finishSession(false)}>Finish session</button></div>
+        <div className="session-bar">
+          <div><small>Observed</small><strong>{sessionTime}</strong></div>
+          <div className="session-kind-control" aria-label="Observation type">
+            <button className={sessionKind === "quick_check" ? "selected" : ""} onClick={() => { setSessionKind("quick_check"); setTargetMinutes(10); }}>Quick check</button>
+            <button className={sessionKind === "away_monitoring" ? "selected" : ""} onClick={() => { setSessionKind("away_monitoring"); setTargetMinutes(180); }}>Going out</button>
+          </div>
+          <label className="target-control"><small>Planned window</small><select value={targetMinutes} onChange={(event) => setTargetMinutes(Number(event.target.value))}>{durationOptions[sessionKind].map((minutes) => <option key={minutes} value={minutes}>{durationLabel(minutes)}</option>)}</select></label>
+          <button className="button button-ghost wake-ipad-button" onClick={() => void wakeIpadDisplay()} disabled={!connected}>{wakeSent ? "Display awake for 60s" : "Wake camera display"}</button><button className="button button-dark" onClick={() => void finishSession(false)}>Finish & review</button>
+        </div>
       </section>
 
       <aside className="timeline-panel">
@@ -103,6 +123,6 @@ export function OwnerRoom({ roomCode }: Props) {
         <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>Optional AI reflection</strong><p>Summarizes event text only. The live video is never sent.</p></div></div><button className="button button-ghost full" onClick={() => void finishSession(true)} disabled={summaryLoading}>{summaryLoading ? "Reflecting…" : "Generate once"}</button></div>
       </aside>
     </div>
-    {summary && <div className="modal-backdrop" onClick={() => setSummary(null)}><section className="summary-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSummary(null)}>×</button><span className="eyebrow">Session reflection · {summary.source === "openai" ? "AI assisted" : "on-device rules"}</span><h2>{summary.headline}</h2><div className="summary-stats"><div><strong>{summary.calmMinutes}</strong><span>calm minutes</span></div><div><strong>{summary.activeEvents}</strong><span>active changes</span></div><div><strong>{summary.longestCalmMinutes}</strong><span>longest calm</span></div></div><div className="next-step"><small>Gentle next step</small><p>{summary.nextStep}</p></div>{summary.estimatedAiCostUsd != null && <p className="cost-note">Estimated model cost for this summary: ${summary.estimatedAiCostUsd.toFixed(5)}</p>}<button className="button button-primary full" onClick={() => { setEvents([]); setStartedAt(Date.now()); setSummary(null); }}>Start a fresh session</button></section></div>}
+    {summary && <div className="modal-backdrop" onClick={() => setSummary(null)}><section className="summary-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSummary(null)}>×</button><span className="eyebrow">Observation review · {summary.source === "openai" ? "AI assisted" : "on-device rules"}</span><h2>{summary.headline}</h2><div className="summary-stats"><div><strong>{summary.observedMinutes}</strong><span>minutes observed</span></div><div><strong>{summary.firstActivityMinute ?? "—"}</strong><span>first activity minute</span></div><div><strong>{summary.activeEvents}</strong><span>active changes</span></div><div><strong>{summary.longestCalmMinutes}</strong><span>longest calm</span></div></div><div className="next-step"><small>What to do with this result</small><p>{summary.nextStep}</p></div>{summary.estimatedAiCostUsd != null && <p className="cost-note">Estimated model cost for this summary: ${summary.estimatedAiCostUsd.toFixed(5)}</p>}<button className="button button-primary full" onClick={() => { setEvents([]); setStartedAt(Date.now()); setSummary(null); }}>Start a fresh observation</button></section></div>}
   </main>;
 }

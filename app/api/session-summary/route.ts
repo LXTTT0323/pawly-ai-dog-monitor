@@ -7,7 +7,7 @@ import { summarizeWithRules } from "@/lib/session-engine";
 export const runtime = "nodejs";
 
 const eventSchema = z.object({ id: z.string(), type: z.enum(["monitoring_started", "motion_active", "settled", "camera_paused", "camera_resumed", "camera_stopped"]), occurredAt: z.string(), confidence: z.number().min(0).max(1), motionScore: z.number().optional(), message: z.string().max(120) });
-const bodySchema = z.object({ dogName: z.string().max(60), targetMinutes: z.number().int().min(1).max(60), startedAt: z.number(), events: z.array(eventSchema).max(100) });
+const bodySchema = z.object({ dogName: z.string().max(60), sessionKind: z.enum(["quick_check", "away_monitoring"]).default("away_monitoring"), targetMinutes: z.number().int().min(1).max(240), startedAt: z.number(), events: z.array(eventSchema).max(100) });
 
 const globalBudget = globalThis as typeof globalThis & { pawlyAiSpend?: number; pawlyAiRequests?: Map<string, { date: string; count: number }> };
 globalBudget.pawlyAiSpend ??= 0;
@@ -16,7 +16,7 @@ globalBudget.pawlyAiRequests ??= new Map();
 export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid session" }, { status: 400 });
-  const fallback = summarizeWithRules(parsed.data.events, parsed.data.startedAt, Date.now(), parsed.data.targetMinutes);
+  const fallback = summarizeWithRules(parsed.data.events, parsed.data.startedAt, Date.now(), parsed.data.targetMinutes, parsed.data.sessionKind);
 
   if (process.env.AI_FEATURE_ENABLED !== "true" || !process.env.OPENAI_API_KEY) return NextResponse.json(fallback);
 
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       reasoning: { effort: "none" },
       max_output_tokens: 300,
       store: false,
-      input: `You are a cautious puppy alone-time session summarizer. Use only the event observations provided. Do not diagnose emotion, health, or separation anxiety. Give one brief headline and one conservative next step. Never recommend increasing duration by more than 15%. Dog: ${parsed.data.dogName}. Target: ${parsed.data.targetMinutes} minutes. Events: ${JSON.stringify(compactEvents)}`,
+      input: `You are a cautious puppy observation summarizer. Use only the event observations provided. Do not diagnose emotion, health, distress, or separation anxiety. The session kind is ${parsed.data.sessionKind}; the planned observation window was ${parsed.data.targetMinutes} minutes. For an away_monitoring session, never prescribe a longer or shorter absence from motion alone: compare sustained activity and recovery with a similar outing. For a quick_check session, suggest useful checkpoints such as 15, 20, 30, 45, or 60 minutes instead of minute-by-minute progression. Dog: ${parsed.data.dogName}. Events: ${JSON.stringify(compactEvents)}`,
       text: { format: { type: "json_schema", name: "pawly_session_summary", strict: true, schema: { type: "object", additionalProperties: false, properties: { headline: { type: "string" }, nextStep: { type: "string" } }, required: ["headline", "nextStep"] } } },
     });
     const result = JSON.parse(response.output_text) as Pick<SessionSummary, "headline" | "nextStep">;

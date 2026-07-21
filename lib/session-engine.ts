@@ -1,4 +1,4 @@
-import type { BehaviorState, PawlyEvent, SessionSummary } from "./domain";
+import type { BehaviorState, PawlyEvent, SessionKind, SessionSummary } from "./domain";
 
 export function deriveState(events: PawlyEvent[], connected: boolean): BehaviorState {
   if (!connected) return "connecting";
@@ -14,33 +14,80 @@ export function summarizeWithRules(
   startedAt: number,
   endedAt = Date.now(),
   targetMinutes?: number,
+  sessionKind: SessionKind = "away_monitoring",
 ): SessionSummary {
-  const totalMinutes = Math.max(1, Math.round((endedAt - startedAt) / 60000));
-  const activeEvents = events.filter((event) => event.type === "motion_active").length;
-  const unavailable = events.some(
+  const observedMinutes = Math.max(1, Math.round((endedAt - startedAt) / 60000));
+  const orderedEvents = [...events]
+    .filter((event) => {
+      const timestamp = Date.parse(event.occurredAt);
+      return Number.isFinite(timestamp) && timestamp >= startedAt && timestamp <= endedAt;
+    })
+    .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
+  const activeEvents = orderedEvents.filter((event) => event.type === "motion_active").length;
+  const unavailable = orderedEvents.some(
     (event) => event.type === "camera_paused" || event.type === "camera_stopped",
   );
-  const estimatedActiveMinutes = Math.min(totalMinutes, Math.ceil(activeEvents * 0.5));
-  const calmMinutes = Math.max(0, totalMinutes - estimatedActiveMinutes);
-  const calmRatio = calmMinutes / totalMinutes;
-  const nextDurationBase = targetMinutes ?? totalMinutes;
 
-  let nextStep = "Repeat the same duration once more before increasing it.";
-  if (!unavailable && calmRatio >= 0.8 && activeEvents <= 2) {
-    nextStep = `Try ${Math.min(60, nextDurationBase + 1, Math.ceil(nextDurationBase * 1.15))} minutes next time.`;
-  } else if (activeEvents >= 5) {
-    nextStep = `Reduce the next session to ${Math.max(1, Math.floor(nextDurationBase * 0.75))} minutes.`;
+  let state: "calm" | "active" = "calm";
+  let stateStartedAt = startedAt;
+  let calmMs = 0;
+  let longestCalmMs = 0;
+  let firstActivityMinute: number | null = null;
+
+  for (const event of orderedEvents) {
+    const timestamp = Date.parse(event.occurredAt);
+    if (event.type === "motion_active" && state === "calm") {
+      const span = Math.max(0, timestamp - stateStartedAt);
+      calmMs += span;
+      longestCalmMs = Math.max(longestCalmMs, span);
+      state = "active";
+      stateStartedAt = timestamp;
+      firstActivityMinute ??= Math.max(0, Math.round((timestamp - startedAt) / 60000));
+    }
+    if (event.type === "settled" && state === "active") {
+      state = "calm";
+      stateStartedAt = timestamp;
+    }
+  }
+  if (state === "calm") {
+    const span = Math.max(0, endedAt - stateStartedAt);
+    calmMs += span;
+    longestCalmMs = Math.max(longestCalmMs, span);
+  }
+
+  const calmMinutes = Math.min(observedMinutes, Math.round(calmMs / 60000));
+  const longestCalmMinutes = Math.min(observedMinutes, Math.round(longestCalmMs / 60000));
+  const calmRatio = calmMinutes / observedMinutes;
+  const target = targetMinutes ?? observedMinutes;
+
+  let nextStep: string;
+  if (unavailable) {
+    nextStep = "Check the camera setup before using this session to make a training decision.";
+  } else if (sessionKind === "away_monitoring") {
+    nextStep = activeEvents === 0
+      ? "Keep this as a baseline for the next similar outing. There is no need to increase the duration minute by minute."
+      : "Compare this with the next outing of a similar length. Review sustained activity and recovery, not isolated movement.";
+  } else if (calmRatio >= 0.8 && activeEvents <= 2) {
+    const nextOptions = [15, 20, 30, 45, 60];
+    const suggested = nextOptions.find((minutes) => minutes > target) ?? target;
+    nextStep = suggested > target
+      ? `This is a useful baseline. When convenient, compare it with a ${suggested}-minute check rather than adding one minute at a time.`
+      : "This is a useful baseline. Repeat it once or move to a normal outing when it fits your day.";
+  } else {
+    nextStep = `Repeat a ${target}-minute check when you can supervise the result, and compare when activity began and whether your puppy settled again.`;
   }
 
   return {
     headline: unavailable
       ? "Part of this session could not be observed"
       : calmRatio >= 0.8
-        ? "A mostly calm session"
-        : "An active session worth repeating",
+        ? "A mostly calm observation"
+        : "An active observation with useful context",
+    observedMinutes,
     calmMinutes,
     activeEvents,
-    longestCalmMinutes: calmMinutes,
+    longestCalmMinutes,
+    firstActivityMinute,
     nextStep,
     source: "rules",
   };
