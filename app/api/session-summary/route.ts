@@ -6,7 +6,7 @@ import { summarizeWithRules } from "@/lib/session-engine";
 
 export const runtime = "nodejs";
 
-const eventSchema = z.object({ id: z.string(), type: z.enum(["monitoring_started", "motion_active", "settled", "camera_paused", "camera_resumed", "camera_stopped"]), occurredAt: z.string(), confidence: z.number().min(0).max(1), motionScore: z.number().optional(), message: z.string().max(120) });
+const eventSchema = z.object({ id: z.string(), type: z.enum(["monitoring_started", "motion_active", "settled", "dog_visible", "dog_not_visible", "sound_active", "sound_settled", "repeated_movement", "camera_paused", "camera_resumed", "camera_stopped"]), occurredAt: z.string(), confidence: z.number().min(0).max(1), motionScore: z.number().optional(), message: z.string().max(120) });
 const bodySchema = z.object({ dogName: z.string().max(60), sessionKind: z.enum(["quick_check", "away_monitoring"]).default("away_monitoring"), targetMinutes: z.number().int().min(1).max(240), startedAt: z.number(), events: z.array(eventSchema).max(100) });
 
 const globalBudget = globalThis as typeof globalThis & { pawlyAiSpend?: number; pawlyAiRequests?: Map<string, { date: string; count: number }> };

@@ -5,7 +5,8 @@ export function deriveState(events: PawlyEvent[], connected: boolean): BehaviorS
   const latest = events[0];
   if (!latest) return "calm";
   if (latest.type === "camera_paused" || latest.type === "camera_stopped") return "unavailable";
-  if (latest.type === "motion_active") return "active";
+  if (latest.type === "dog_not_visible") return "out_of_view";
+  if (latest.type === "motion_active" || latest.type === "sound_active" || latest.type === "repeated_movement") return "active";
   return "calm";
 }
 
@@ -23,7 +24,9 @@ export function summarizeWithRules(
       return Number.isFinite(timestamp) && timestamp >= startedAt && timestamp <= endedAt;
     })
     .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
-  const activeEvents = orderedEvents.filter((event) => event.type === "motion_active").length;
+  const activeTypes = new Set(["motion_active", "sound_active", "repeated_movement"]);
+  const settledTypes = new Set(["settled", "sound_settled"]);
+  const activeEvents = orderedEvents.filter((event) => activeTypes.has(event.type)).length;
   const unavailable = orderedEvents.some(
     (event) => event.type === "camera_paused" || event.type === "camera_stopped",
   );
@@ -36,7 +39,7 @@ export function summarizeWithRules(
 
   for (const event of orderedEvents) {
     const timestamp = Date.parse(event.occurredAt);
-    if (event.type === "motion_active" && state === "calm") {
+    if (activeTypes.has(event.type) && state === "calm") {
       const span = Math.max(0, timestamp - stateStartedAt);
       calmMs += span;
       longestCalmMs = Math.max(longestCalmMs, span);
@@ -44,7 +47,7 @@ export function summarizeWithRules(
       stateStartedAt = timestamp;
       firstActivityMinute ??= Math.max(0, Math.round((timestamp - startedAt) / 60000));
     }
-    if (event.type === "settled" && state === "active") {
+    if (settledTypes.has(event.type) && state === "active") {
       state = "calm";
       stateStartedAt = timestamp;
     }
@@ -55,8 +58,12 @@ export function summarizeWithRules(
     longestCalmMs = Math.max(longestCalmMs, span);
   }
 
-  const calmMinutes = Math.min(observedMinutes, Math.round(calmMs / 60000));
-  const longestCalmMinutes = Math.min(observedMinutes, Math.round(longestCalmMs / 60000));
+  const calmMinutes = activeEvents === 0
+    ? observedMinutes
+    : Math.min(observedMinutes, Math.round(calmMs / 60000));
+  const longestCalmMinutes = activeEvents === 0
+    ? observedMinutes
+    : Math.min(observedMinutes, Math.round(longestCalmMs / 60000));
   const calmRatio = calmMinutes / observedMinutes;
   const target = targetMinutes ?? observedMinutes;
 
@@ -80,6 +87,8 @@ export function summarizeWithRules(
   return {
     headline: unavailable
       ? "Part of this session could not be observed"
+      : activeEvents === 0
+        ? "No meaningful changes detected"
       : calmRatio >= 0.8
         ? "A mostly calm observation"
         : "An active observation with useful context",

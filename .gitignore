@@ -1,4 +1,5 @@
 .next
+.vinext
 dist
 node_modules
 .vercel
@@ -9,3 +10,5 @@ coverage
 *.log
 *-smoke.png
 *.tsbuildinfo
+
+.env*

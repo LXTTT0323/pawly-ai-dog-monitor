@@ -1,16 +1,21 @@
 # Pawly Coach
 
-A deployable, web-first private beta that turns an unused iPad into a live puppy room and alone-time practice dashboard.
+A deployable, web-first private beta that turns a spare phone, tablet, or computer into a dog-aware room monitor and outing review.
 
 ## What works in this build
 
 - 12-character private room setup.
-- iPad camera and microphone capture.
+- Camera and optional microphone capture on modern phones, tablets, and computers.
 - Encrypted WebRTC live video through LiveKit.
 - Owner live dashboard on another browser/device.
+- One-tap room audio playback on the owner dashboard.
 - Automatic black iPad standby after 30 seconds, with local tap or remote 60-second wake.
 - Camera pause/resume and disconnect visibility.
-- Local frame-difference motion gate with no cloud inference cost.
+- Local frame-difference motion and audio gates with no cloud inference cost.
+- Local MediaPipe dog presence and location detection using EfficientDet-Lite0.
+- Adaptive dog detection: slow while settled, temporarily faster after meaningful movement.
+- Quick Check presets (10-30 minutes) and Going Out presets (30 minutes-4 hours).
+- Dog visibility, sound, repeated movement, and camera-health timeline events.
 - Meaningful state-transition events sent over the encrypted room data channel.
 - Conservative rule-based session summaries.
 - Optional, explicit OpenAI text summary with daily and monthly caps.
@@ -28,7 +33,7 @@ For a second device on the local network, serve the web app over HTTPS. Camera a
 
 ## iPad standby behavior
 
-After monitoring starts, the camera preview stays visible for 30 seconds and then Pawly covers the iPad with a nearly black standby screen. The camera, microphone, local motion gate, and live stream remain active. Tap the iPad or use **Wake iPad display** on the owner dashboard to reveal the preview for 60 seconds.
+After monitoring starts, the camera preview stays visible for 30 seconds and then Pawly covers the iPad with a nearly black standby screen. The camera, enabled microphone, local detectors, and live stream remain active. Tap the iPad or use **Wake camera display** on the owner dashboard to reveal the preview for 60 seconds.
 
 Do not lock the iPad with its hardware button: iPadOS suspends browser camera capture when the device is locked. On LCD iPads, black pixels do not turn off the backlight, so lower the system brightness for the darkest result. OLED iPad Pro models benefit more from the black standby surface.
 
@@ -52,7 +57,7 @@ Leave `AI_FEATURE_ENABLED=false` until the non-AI product loop is validated. The
 
 ## Cost behavior
 
-Continuous video is never sent to OpenAI. Motion gating runs in the camera browser. The optional summary sends at most 100 compact event records and requests at most 300 output tokens. It is invoked only by an explicit owner action and falls back to deterministic rules when disabled, capped, or unavailable.
+Continuous video and audio are never sent to OpenAI. Motion, sustained-sound, and dog detection run in the camera browser. The optional summary sends at most 100 compact text event records and requests at most 300 output tokens. It is invoked only by an explicit owner action and falls back to deterministic rules when disabled, capped, or unavailable.
 
 The current in-memory dollar counter is sufficient for one private-beta server instance. Replace it with an atomic database ledger before enabling AI on a horizontally scaled deployment.
 

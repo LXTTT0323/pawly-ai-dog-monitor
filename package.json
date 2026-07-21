@@ -12,6 +12,7 @@
     "build:next": "next build"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.35",
     "@vitejs/plugin-rsc": "^0.5.28",
     "livekit-client": "^2.17.1",
     "livekit-server-sdk": "^2.13.3",

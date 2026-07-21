@@ -9,7 +9,7 @@ import { deriveState, summarizeWithRules } from "@/lib/session-engine";
 
 interface Props { roomCode: string; }
 
-const stateCopy = { calm: ["Calm", "The room has settled"], active: ["Active", "Movement is elevated"], unavailable: ["Unavailable", "The camera needs attention"], connecting: ["Connecting", "Looking for the camera"] } as const;
+const stateCopy = { calm: ["Calm", "The room has settled"], active: ["Active", "A sustained change was noticed"], out_of_view: ["Out of view", "The camera is still online"], unavailable: ["Unavailable", "The camera needs attention"], connecting: ["Connecting", "Looking for the camera"] } as const;
 const durationOptions: Record<SessionKind, number[]> = {
   quick_check: [10, 15, 20, 30],
   away_monitoring: [30, 60, 120, 180, 240],
@@ -22,8 +22,18 @@ function durationLabel(minutes: number) {
   return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
 }
 
+function eventSymbol(type: PawlyEvent["type"]) {
+  if (type === "motion_active" || type === "repeated_movement") return "↗";
+  if (type === "sound_active") return "♪";
+  if (type === "dog_visible") return "●";
+  if (type === "dog_not_visible") return "?";
+  if (type.includes("camera")) return "!";
+  return "✓";
+}
+
 export function OwnerRoom({ roomCode }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const roomRef = useRef<Room | null>(null);
   const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<PawlyEvent[]>([]);
@@ -35,6 +45,8 @@ export function OwnerRoom({ roomCode }: Props) {
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [wakeSent, setWakeSent] = useState(false);
+  const [remoteAudioAvailable, setRemoteAudioAvailable] = useState(false);
+  const [listening, setListening] = useState(false);
   const state = deriveState(events, connected);
 
   const connect = useCallback(async () => {
@@ -45,14 +57,18 @@ export function OwnerRoom({ roomCode }: Props) {
       const { token, serverUrl } = await response.json();
       const room = new Room({ adaptiveStream: true, disconnectOnPageLeave: true });
       roomRef.current = room;
-      room.on(RoomEvent.TrackSubscribed, (track) => { if (track.kind === Track.Kind.Video && videoRef.current) track.attach(videoRef.current); });
-      room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach());
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind === Track.Kind.Video && videoRef.current) track.attach(videoRef.current);
+        if (track.kind === Track.Kind.Audio && audioRef.current) { track.attach(audioRef.current); setRemoteAudioAvailable(true); }
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); } track.detach(); });
       room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
         if (topic !== "pawly-event") return;
         try {
           const event = JSON.parse(new TextDecoder().decode(payload)) as PawlyEvent;
           setEvents((current) => [event, ...current].slice(0, 100));
-          if (document.hidden && event.type === "motion_active" && Notification.permission === "granted") new Notification("Pawly noticed more movement", { body: "Open the room to check in." });
+          const noteworthy = event.type === "motion_active" || event.type === "sound_active" || event.type === "repeated_movement" || event.type === "dog_not_visible";
+          if (document.hidden && noteworthy && Notification.permission === "granted") new Notification(event.message, { body: "Open Pawly to check the room timeline." });
         } catch { /* ignore malformed participant data */ }
       });
       room.on(RoomEvent.ParticipantConnected, () => setConnected(true));
@@ -60,7 +76,10 @@ export function OwnerRoom({ roomCode }: Props) {
       room.on(RoomEvent.Disconnected, () => setConnected(false));
       await room.connect(serverUrl, token);
       setConnected(room.remoteParticipants.size > 0);
-      for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) if (publication.track?.kind === Track.Kind.Video && videoRef.current) publication.track.attach(videoRef.current);
+      for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) {
+        if (publication.track?.kind === Track.Kind.Video && videoRef.current) publication.track.attach(videoRef.current);
+        if (publication.track?.kind === Track.Kind.Audio && audioRef.current) { publication.track.attach(audioRef.current); setRemoteAudioAvailable(true); }
+      }
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not join room"); }
   }, [roomCode]);
 
@@ -88,6 +107,14 @@ export function OwnerRoom({ roomCode }: Props) {
 
   const requestNotifications = async () => { if ("Notification" in window) await Notification.requestPermission(); };
 
+  const enableListening = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    await room.startAudio();
+    await audioRef.current?.play().catch(() => undefined);
+    setListening(true);
+  };
+
   const wakeIpadDisplay = async () => {
     const room = roomRef.current;
     if (!room || !connected) return;
@@ -104,7 +131,7 @@ export function OwnerRoom({ roomCode }: Props) {
     <div className="dashboard-grid">
       <section className="live-panel">
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><code>{roomCode}</code></div>
-        <div className="owner-video"><video ref={videoRef} autoPlay playsInline />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
+        <div className="owner-video"><video ref={videoRef} autoPlay playsInline /><audio ref={audioRef} autoPlay />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{remoteAudioAvailable && !listening && <button className="listen-room-button" onClick={() => void enableListening()}>♪ Tap to hear the room</button>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
         {error && <p className="error-banner">{error}</p>}
         <div className="session-bar">
           <div><small>Observed</small><strong>{sessionTime}</strong></div>
@@ -119,7 +146,7 @@ export function OwnerRoom({ roomCode }: Props) {
 
       <aside className="timeline-panel">
         <div className="timeline-heading"><div><span className="eyebrow">Live timeline</span><h2>What matters</h2></div><span className="event-count">{events.length}</span></div>
-        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><p>Meaningful changes will appear here. Pawly intentionally ignores ordinary frame-to-frame movement.</p></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{event.type === "motion_active" ? "↗" : event.type.includes("camera") ? "!" : "✓"}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Local motion score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
+        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><p>Dog visibility, sustained sound, and meaningful movement changes will appear here. Ordinary frame noise is ignored.</p></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Local motion score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
         <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>Optional AI reflection</strong><p>Summarizes event text only. The live video is never sent.</p></div></div><button className="button button-ghost full" onClick={() => void finishSession(true)} disabled={summaryLoading}>{summaryLoading ? "Reflecting…" : "Generate once"}</button></div>
       </aside>
     </div>
