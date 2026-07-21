@@ -4,8 +4,10 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { startAudioEnergyAnalyzer } from "@/lib/audio-energy-analyzer";
 import { BehaviorTracker } from "@/lib/behavior-tracker";
+import { clipFileName, listSavedClips, saveClip, type ClipTrigger, type SavedClip } from "@/lib/clip-store";
 import { startDogDetector, type DogDetectorController, type DogDetectorStatus, type DogReading } from "@/lib/dog-detector";
 import { eventMessage, type EventType, type PawlyEvent } from "@/lib/domain";
+import { recordEventClip } from "@/lib/event-clip-recorder";
 import { startMotionAnalyzer } from "@/lib/motion-analyzer";
 
 interface Props { roomCode: string; }
@@ -39,6 +41,9 @@ export function CameraStation({ roomCode }: Props) {
   const sustainedRef = useRef({ activeMs: 0, settledMs: 0 });
   const lastAudioStateRef = useRef<"active" | "settled">("settled");
   const sustainedAudioRef = useRef({ activeMs: 0, settledMs: 0 });
+  const clipRecordingRef = useRef(false);
+  const lastClipAtRef = useRef(0);
+  const [clipStatus, setClipStatus] = useState<"ready" | "recording" | "saved" | "unsupported">("ready");
 
   const publishEvent = useCallback(async (type: EventType, score?: number, confidenceOverride?: number) => {
     const room = roomRef.current;
@@ -46,6 +51,48 @@ export function CameraStation({ roomCode }: Props) {
     const event: PawlyEvent = { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), confidence: confidenceOverride ?? (type === "motion_active" ? 0.72 : 0.95), motionScore: score, message: eventMessage(type) };
     await room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(event)), { reliable: true, topic: "pawly-event" });
   }, []);
+
+  const sendClip = useCallback(async (clip: SavedClip, destinationIdentities?: string[]) => {
+    const room = roomRef.current;
+    if (!room || room.remoteParticipants.size === 0) return;
+    const file = new File([clip.blob], clipFileName(clip), { type: clip.mimeType });
+    await room.localParticipant.sendFile(file, {
+      topic: "pawly-clip",
+      mimeType: clip.mimeType,
+      destinationIdentities,
+    });
+  }, []);
+
+  const sendSavedClips = useCallback(async (destinationIdentity?: string) => {
+    const recentClips = (await listSavedClips(roomCode)).slice(0, 6);
+    for (const clip of recentClips) {
+      await sendClip(clip, destinationIdentity ? [destinationIdentity] : undefined).catch(() => undefined);
+    }
+  }, [roomCode, sendClip]);
+
+  const captureEventClip = useCallback(async (trigger: ClipTrigger) => {
+    const now = Date.now();
+    if (clipRecordingRef.current || now - lastClipAtRef.current < 20_000) return;
+    const room = roomRef.current;
+    const videoTrack = room?.localParticipant.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack;
+    const audioTrack = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack;
+    if (!videoTrack) return;
+
+    clipRecordingRef.current = true;
+    lastClipAtRef.current = now;
+    setClipStatus("recording");
+    try {
+      const clip = await recordEventClip(new MediaStream([videoTrack, ...(audioTrack ? [audioTrack] : [])]), roomCode, trigger);
+      await saveClip(clip);
+      setClipStatus("saved");
+      await sendClip(clip).catch(() => undefined);
+      window.setTimeout(() => setClipStatus("ready"), 4_000);
+    } catch {
+      setClipStatus("unsupported");
+    } finally {
+      clipRecordingRef.current = false;
+    }
+  }, [roomCode, sendClip]);
 
   const requestWakeLock = useCallback(async () => {
     try {
@@ -114,11 +161,12 @@ export function CameraStation({ roomCode }: Props) {
       const room = new Room({ adaptiveStream: true, dynacast: true, disconnectOnPageLeave: true });
       roomRef.current = room;
       room.on(RoomEvent.Disconnected, () => setStatus("idle"));
-      room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+      room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
         if (topic !== "pawly-command") return;
         try {
           const command = JSON.parse(new TextDecoder().decode(payload)) as { type?: string };
           if (command.type === "wake_display") wakeDisplay();
+          if (command.type === "request_saved_clips") void sendSavedClips(participant?.identity);
         } catch { /* Ignore malformed remote commands. */ }
       });
       await room.connect(serverUrl, token);
@@ -140,7 +188,7 @@ export function CameraStation({ roomCode }: Props) {
       roomRef.current?.disconnect(); roomRef.current = null;
       setError(cameraErrorMessage(cause)); setStatus("error");
     }
-  }, [enableAudio, publishEvent, requestWakeLock, roomCode, wakeDisplay]);
+  }, [enableAudio, publishEvent, requestWakeLock, roomCode, sendSavedClips, wakeDisplay]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
@@ -149,10 +197,10 @@ export function CameraStation({ roomCode }: Props) {
       dogDetectorRef.current?.setMotionActive(active);
       if (active) { sustainedRef.current.activeMs += intervalMs; sustainedRef.current.settledMs = 0; }
       else { sustainedRef.current.settledMs += intervalMs; sustainedRef.current.activeMs = 0; }
-      if (sustainedRef.current.activeMs >= 2_250 && lastStateRef.current !== "active") { lastStateRef.current = "active"; void publishEvent("motion_active", score); }
+      if (sustainedRef.current.activeMs >= 2_250 && lastStateRef.current !== "active") { lastStateRef.current = "active"; void publishEvent("motion_active", score); void captureEventClip("movement"); }
       if (sustainedRef.current.settledMs >= 12_000 && lastStateRef.current !== "settled") { lastStateRef.current = "settled"; void publishEvent("settled", score); }
     });
-  }, [publishEvent, status]);
+  }, [captureEventClip, publishEvent, status]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
@@ -170,7 +218,7 @@ export function CameraStation({ roomCode }: Props) {
           visibility.published = reading.visible;
           void publishEvent(reading.visible ? "dog_visible" : "dog_not_visible", undefined, Math.max(0.5, reading.confidence));
         }
-        if (behaviorTrackerRef.current.addDogReading(reading)) void publishEvent("repeated_movement", undefined, 0.68);
+        if (behaviorTrackerRef.current.addDogReading(reading)) { void publishEvent("repeated_movement", undefined, 0.68); void captureEventClip("repeated_movement"); }
       },
       setDogStatus,
     );
@@ -179,7 +227,7 @@ export function CameraStation({ roomCode }: Props) {
       controller.stop();
       dogDetectorRef.current = null;
     };
-  }, [publishEvent, status]);
+  }, [captureEventClip, publishEvent, status]);
 
   useEffect(() => {
     if (status !== "live" || !audioEnabled) return;
@@ -193,14 +241,14 @@ export function CameraStation({ roomCode }: Props) {
       setAudioLevel(level);
       if (active) { sustainedAudioRef.current.activeMs += intervalMs; sustainedAudioRef.current.settledMs = 0; }
       else { sustainedAudioRef.current.settledMs += intervalMs; sustainedAudioRef.current.activeMs = 0; }
-      if (sustainedAudioRef.current.activeMs >= 2_000 && lastAudioStateRef.current !== "active") { lastAudioStateRef.current = "active"; void publishEvent("sound_active", undefined, 0.66); }
+      if (sustainedAudioRef.current.activeMs >= 2_000 && lastAudioStateRef.current !== "active") { lastAudioStateRef.current = "active"; void publishEvent("sound_active", undefined, 0.66); void captureEventClip("sound"); }
       if (sustainedAudioRef.current.settledMs >= 8_000 && lastAudioStateRef.current !== "settled") { lastAudioStateRef.current = "settled"; void publishEvent("sound_settled", undefined, 0.82); }
     }).then((stopAnalyzer) => {
       if (cancelled) stopAnalyzer();
       else cleanup = stopAnalyzer;
     }).catch(() => setAudioStatus("blocked"));
     return () => { cancelled = true; cleanup?.(); };
-  }, [audioEnabled, publishEvent, status]);
+  }, [audioEnabled, captureEventClip, publishEvent, status]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -218,9 +266,9 @@ export function CameraStation({ roomCode }: Props) {
 
   return <div className="camera-station">
     <div className="camera-header"><div><span className={`status-dot ${status}`} /><strong>{status === "live" ? "Monitoring live" : status === "connecting" ? "Opening room…" : status === "error" ? "Camera needs attention" : "Camera ready"}</strong></div><code>{roomCode}</code></div>
-    <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline />{dogReading?.visible && dogReading.box && <div className="dog-detection-box" style={{ left: `${dogReading.box.x * 100}%`, top: `${dogReading.box.y * 100}%`, width: `${dogReading.box.width * 100}%`, height: `${dogReading.box.height * 100}%` }}><span>Dog · {Math.round(dogReading.confidence * 100)}%</span></div>}<div className="camera-analysis-stack"><div className="camera-overlay"><span>Eco motion</span><strong>{Math.round(motionScore * 100)}%</strong></div><div className={`camera-overlay dog-analysis ${dogReading?.visible ? "detected" : ""}`}><span>Dog AI</span><strong>{dogStatus === "loading" ? "Loading" : dogStatus === "unavailable" ? "Motion only" : dogReading?.visible ? `${Math.round(dogReading.confidence * 100)}% visible` : "Scanning"}</strong></div><div className={`camera-overlay sound-analysis ${audioEnabled ? "detected" : ""}`}><span>Sound</span><strong>{audioStatus === "requesting" ? "Requesting" : audioEnabled ? `${Math.round(audioLevel * 100)}%` : audioStatus === "blocked" ? "Blocked" : "Off"}</strong></div></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place this device where the floor, bed, or crate is visible. Pawly will request camera and microphone access; video still works if sound is declined.</p>{status === "error" && <p className="error-text" role="alert">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : status === "error" ? "Try camera again" : "Allow camera, sound & start"}</button></div>}</div>
+    <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline />{dogReading?.visible && dogReading.box && <div className="dog-detection-box" style={{ left: `${dogReading.box.x * 100}%`, top: `${dogReading.box.y * 100}%`, width: `${dogReading.box.width * 100}%`, height: `${dogReading.box.height * 100}%` }}><span>Dog · {Math.round(dogReading.confidence * 100)}%</span></div>}<div className="camera-analysis-stack"><div className="camera-overlay"><span>Eco motion</span><strong>{Math.round(motionScore * 100)}%</strong></div><div className={`camera-overlay dog-analysis ${dogReading?.visible ? "detected" : ""}`}><span>Dog AI</span><strong>{dogStatus === "loading" ? "Loading" : dogStatus === "unavailable" ? "Motion only" : dogReading?.visible ? `${Math.round(dogReading.confidence * 100)}% visible` : "Scanning"}</strong></div><div className={`camera-overlay sound-analysis ${audioEnabled ? "detected" : ""}`}><span>Sound</span><strong>{audioStatus === "requesting" ? "Requesting" : audioEnabled ? `${Math.round(audioLevel * 100)}%` : audioStatus === "blocked" ? "Blocked" : "Off"}</strong></div><div className={`camera-overlay clip-analysis ${clipStatus === "recording" ? "recording" : ""}`}><span>Event clip</span><strong>{clipStatus === "recording" ? "Saving 12s" : clipStatus === "saved" ? "Saved" : clipStatus === "unsupported" ? "Unavailable" : "Ready"}</strong></div></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place this device where the floor, bed, or crate is visible. Pawly will request camera and microphone access; video still works if sound is declined.</p>{status === "error" && <p className="error-text" role="alert">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : status === "error" ? "Try camera again" : "Allow camera, sound & start"}</button></div>}</div>
     {status === "live" && <div className="camera-controls"><div><strong>Dark standby keeps monitoring active</strong><span>Do not lock this device—Pawly blacks out the page instead.</span></div><div className="camera-control-actions">{audioEnabled ? <button className="button button-ghost camera-standby-button" onClick={() => void disableAudio()}>Sound on · turn off</button> : <button className="button button-ghost camera-standby-button" onClick={() => void enableAudio()} disabled={audioStatus === "requesting"}>{audioStatus === "requesting" ? "Opening sound…" : audioStatus === "blocked" ? "Retry sound permission" : "Enable sound"}</button>}<button className="button button-ghost camera-standby-button" onClick={enterStandby}>Dark standby now</button><button className="button button-danger" onClick={stop}>Stop monitoring</button></div></div>}
-    <p className="camera-privacy">Live video · {audioEnabled ? "sound analysis on" : "sound off"} · no continuous recording · local adaptive AI</p>
+    <p className="camera-privacy">Live video · {audioEnabled ? "sound analysis on" : "sound off"} · 12-second event clips only · saved locally · local adaptive AI</p>
     {status === "live" && standby && <button className="standby-screen" onClick={() => wakeDisplay()} aria-label="Wake the camera monitoring display"><span className="standby-dot" /><strong>Pawly is monitoring</strong><small>Tap anywhere to show the camera for 60 seconds</small></button>}
   </div>;
 }

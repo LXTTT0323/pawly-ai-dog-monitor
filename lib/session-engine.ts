@@ -27,6 +27,9 @@ export function summarizeWithRules(
   const activeTypes = new Set(["motion_active", "sound_active", "repeated_movement"]);
   const settledTypes = new Set(["settled", "sound_settled"]);
   const activeEvents = orderedEvents.filter((event) => activeTypes.has(event.type)).length;
+  const movementEvents = orderedEvents.filter((event) => event.type === "motion_active" || event.type === "repeated_movement").length;
+  const soundEvents = orderedEvents.filter((event) => event.type === "sound_active").length;
+  const outOfViewEvents = orderedEvents.filter((event) => event.type === "dog_not_visible").length;
   const unavailable = orderedEvents.some(
     (event) => event.type === "camera_paused" || event.type === "camera_stopped",
   );
@@ -92,6 +95,14 @@ export function summarizeWithRules(
       : calmRatio >= 0.8
         ? "A mostly calm observation"
         : "An active observation with useful context",
+    behaviorSummary: activeEvents === 0
+      ? "No sustained movement or sound changes were detected during this observation."
+      : `Pawly noticed ${movementEvents} movement change${movementEvents === 1 ? "" : "s"} and ${soundEvents} sustained sound event${soundEvents === 1 ? "" : "s"}.`,
+    notablePatterns: [
+      ...(movementEvents > 0 ? [`${movementEvents} meaningful movement change${movementEvents === 1 ? "" : "s"}`] : []),
+      ...(soundEvents > 0 ? [`${soundEvents} sustained sound event${soundEvents === 1 ? "" : "s"}`] : []),
+      ...(outOfViewEvents > 0 ? [`Dog moved out of view ${outOfViewEvents} time${outOfViewEvents === 1 ? "" : "s"}`] : []),
+    ].slice(0, 3),
     observedMinutes,
     calmMinutes,
     activeEvents,

@@ -16,6 +16,9 @@ A deployable, web-first private beta that turns a spare phone, tablet, or comput
 - Adaptive dog detection: slow while settled, temporarily faster after meaningful movement.
 - Quick Check presets (10-30 minutes) and Going Out presets (30 minutes-4 hours).
 - Dog visibility, sound, repeated movement, and camera-health timeline events.
+- Automatic 12-second event clips for movement, repeated movement, or sustained sound.
+- Clip transfer through the private LiveKit room and local browser storage (up to 20 per room).
+- Custom 4-12 hour planned outing windows.
 - Meaningful state-transition events sent over the encrypted room data channel.
 - Conservative rule-based session summaries.
 - Optional, explicit OpenAI text summary with daily and monthly caps.
@@ -53,7 +56,7 @@ Optional AI:
 - `AI_DAILY_REQUEST_LIMIT=20`
 - `AI_MONTHLY_BUDGET_USD=5`
 
-Leave `AI_FEATURE_ENABLED=false` until the non-AI product loop is validated. The app remains useful and fully functional without an OpenAI key.
+The app remains useful and fully functional without an OpenAI key. When AI is enabled, the UI labels whether a review came from OpenAI or the deterministic fallback.
 
 ## Cost behavior
 

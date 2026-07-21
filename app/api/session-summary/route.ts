@@ -7,7 +7,7 @@ import { summarizeWithRules } from "@/lib/session-engine";
 export const runtime = "nodejs";
 
 const eventSchema = z.object({ id: z.string(), type: z.enum(["monitoring_started", "motion_active", "settled", "dog_visible", "dog_not_visible", "sound_active", "sound_settled", "repeated_movement", "camera_paused", "camera_resumed", "camera_stopped"]), occurredAt: z.string(), confidence: z.number().min(0).max(1), motionScore: z.number().optional(), message: z.string().max(120) });
-const bodySchema = z.object({ dogName: z.string().max(60), sessionKind: z.enum(["quick_check", "away_monitoring"]).default("away_monitoring"), targetMinutes: z.number().int().min(1).max(240), startedAt: z.number(), events: z.array(eventSchema).max(100) });
+const bodySchema = z.object({ dogName: z.string().max(60), sessionKind: z.enum(["quick_check", "away_monitoring"]).default("away_monitoring"), targetMinutes: z.number().int().min(1).max(720), startedAt: z.number(), events: z.array(eventSchema).max(100) });
 
 const globalBudget = globalThis as typeof globalThis & { pawlyAiSpend?: number; pawlyAiRequests?: Map<string, { date: string; count: number }> };
 globalBudget.pawlyAiSpend ??= 0;
@@ -36,10 +36,10 @@ export async function POST(request: Request) {
       reasoning: { effort: "none" },
       max_output_tokens: 300,
       store: false,
-      input: `You are a cautious puppy observation summarizer. Use only the event observations provided. Do not diagnose emotion, health, distress, or separation anxiety. The session kind is ${parsed.data.sessionKind}; the planned observation window was ${parsed.data.targetMinutes} minutes. For an away_monitoring session, never prescribe a longer or shorter absence from motion alone: compare sustained activity and recovery with a similar outing. For a quick_check session, suggest useful checkpoints such as 15, 20, 30, 45, or 60 minutes instead of minute-by-minute progression. Dog: ${parsed.data.dogName}. Events: ${JSON.stringify(compactEvents)}`,
-      text: { format: { type: "json_schema", name: "pawly_session_summary", strict: true, schema: { type: "object", additionalProperties: false, properties: { headline: { type: "string" }, nextStep: { type: "string" } }, required: ["headline", "nextStep"] } } },
+      input: `Summarize one puppy room observation for the owner. Use only the timestamped sensor events provided. Describe observable behavior sequences such as movement, sustained sound, going out of view, and settling again. Never label a sound as barking unless the events explicitly classify it as barking. Do not diagnose emotion, health, distress, or separation anxiety. Make the summary specific enough that a user can tell it came from these events, not a generic template. The session kind is ${parsed.data.sessionKind}; the user planned ${parsed.data.targetMinutes} minutes, but only ${fallback.observedMinutes} minutes were actually observed. Never imply the full planned window was observed when it was not. For an away_monitoring session, never prescribe a longer or shorter absence from motion alone: compare sustained activity and recovery with a similar outing. For a quick_check session, suggest useful checkpoints such as 15, 20, 30, 45, or 60 minutes instead of minute-by-minute progression. Dog: ${parsed.data.dogName}. Events: ${JSON.stringify(compactEvents)}`,
+      text: { verbosity: "low", format: { type: "json_schema", name: "pawly_session_summary", strict: true, schema: { type: "object", additionalProperties: false, properties: { headline: { type: "string" }, behaviorSummary: { type: "string" }, notablePatterns: { type: "array", items: { type: "string" }, maxItems: 3 }, nextStep: { type: "string" } }, required: ["headline", "behaviorSummary", "notablePatterns", "nextStep"] } } },
     });
-    const result = JSON.parse(response.output_text) as Pick<SessionSummary, "headline" | "nextStep">;
+    const result = JSON.parse(response.output_text) as Pick<SessionSummary, "headline" | "behaviorSummary" | "notablePatterns" | "nextStep">;
     const inputTokens = response.usage?.input_tokens ?? 0;
     const outputTokens = response.usage?.output_tokens ?? 0;
     const estimatedAiCostUsd = inputTokens / 1_000_000 + (outputTokens * 6) / 1_000_000;

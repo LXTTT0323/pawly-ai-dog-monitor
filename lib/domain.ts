@@ -26,6 +26,8 @@ export interface PawlyEvent {
 
 export interface SessionSummary {
   headline: string;
+  behaviorSummary: string;
+  notablePatterns: string[];
   observedMinutes: number;
   calmMinutes: number;
   activeEvents: number;
