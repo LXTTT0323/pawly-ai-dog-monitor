@@ -35,7 +35,7 @@ export default function SetupPage() {
           <div className="divider" />
           <div className="setup-step"><span>2</span><div><h2>Watch from your phone</h2><p>Open the private link on another device, or enter an existing room key.</p><div className="button-row"><a className="button button-primary" href={watchUrl}>Watch this room</a><button className="button button-ghost" onClick={() => navigator.clipboard.writeText(watchUrl)}>Copy owner link</button></div><label className="join-field"><span>Join another room</span><div><input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, "").slice(0, 12))} placeholder="12-character key" /><a aria-disabled={!isRoomCode(joinCode)} className={`button button-dark ${!isRoomCode(joinCode) ? "disabled" : ""}`} href={isRoomCode(joinCode) ? `/watch?room=${joinCode}` : undefined}>Join</a></div></label></div></div>
         </div>
-        <p className="beta-warning"><strong>Beta limitation:</strong> this web version must stay visible on the plugged-in iPad. If iPadOS locks or hides it, Pawly reports monitoring as paused.</p>
+        <p className="beta-warning"><strong>iPad note:</strong> keep the iPad plugged in and do not press its lock button. Pawly automatically switches to a nearly black standby screen while the camera stays active; tap it—or use “Wake iPad display” from your phone—to show the camera again.</p>
       </section>
     </main>
   );

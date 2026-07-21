@@ -11,7 +11,9 @@ export function CameraStation({ roomCode }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const roomRef = useRef<Room | null>(null);
   const wakeLockRef = useRef<{ release(): Promise<void> } | null>(null);
+  const standbyTimerRef = useRef<number | null>(null);
   const [status, setStatus] = useState<"idle" | "connecting" | "live" | "error">("idle");
+  const [standby, setStandby] = useState(false);
   const [error, setError] = useState("");
   const [motionScore, setMotionScore] = useState(0);
   const lastStateRef = useRef<"active" | "settled">("settled");
@@ -31,13 +33,31 @@ export function CameraStation({ roomCode }: Props) {
     } catch { /* iPad can deny wake lock; UI already explains the fallback. */ }
   }, []);
 
+  const clearStandbyTimer = useCallback(() => {
+    if (standbyTimerRef.current != null) window.clearTimeout(standbyTimerRef.current);
+    standbyTimerRef.current = null;
+  }, []);
+
+  const enterStandby = useCallback(() => {
+    clearStandbyTimer();
+    setStandby(true);
+  }, [clearStandbyTimer]);
+
+  const wakeDisplay = useCallback((returnToStandbyAfterMs = 60_000) => {
+    clearStandbyTimer();
+    setStandby(false);
+    standbyTimerRef.current = window.setTimeout(() => setStandby(true), returnToStandbyAfterMs);
+  }, [clearStandbyTimer]);
+
   const stop = useCallback(async () => {
+    clearStandbyTimer();
+    setStandby(false);
     await publishEvent("camera_stopped");
     roomRef.current?.disconnect();
     roomRef.current = null;
     await wakeLockRef.current?.release().catch(() => undefined);
     setStatus("idle");
-  }, [publishEvent]);
+  }, [clearStandbyTimer, publishEvent]);
 
   const start = useCallback(async () => {
     setStatus("connecting"); setError("");
@@ -48,6 +68,13 @@ export function CameraStation({ roomCode }: Props) {
       const room = new Room({ adaptiveStream: true, dynacast: true, disconnectOnPageLeave: true });
       roomRef.current = room;
       room.on(RoomEvent.Disconnected, () => setStatus("idle"));
+      room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+        if (topic !== "pawly-command") return;
+        try {
+          const command = JSON.parse(new TextDecoder().decode(payload)) as { type?: string };
+          if (command.type === "wake_display") wakeDisplay();
+        } catch { /* Ignore malformed remote commands. */ }
+      });
       await room.connect(serverUrl, token);
       await room.localParticipant.setCameraEnabled(true, { facingMode: "environment", resolution: { width: 1280, height: 720, frameRate: 20 } });
       await room.localParticipant.setMicrophoneEnabled(true, { echoCancellation: true, noiseSuppression: true });
@@ -55,12 +82,13 @@ export function CameraStation({ roomCode }: Props) {
       if (videoRef.current && publication?.track) publication.track.attach(videoRef.current);
       await requestWakeLock();
       setStatus("live");
+      wakeDisplay(30_000);
       await publishEvent("monitoring_started");
     } catch (cause) {
       roomRef.current?.disconnect(); roomRef.current = null;
       setError(cause instanceof Error ? cause.message : "Camera could not start"); setStatus("error");
     }
-  }, [publishEvent, requestWakeLock, roomCode]);
+  }, [publishEvent, requestWakeLock, roomCode, wakeDisplay]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
@@ -82,12 +110,16 @@ export function CameraStation({ roomCode }: Props) {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [publishEvent, requestWakeLock, status]);
 
-  useEffect(() => () => { roomRef.current?.disconnect(); }, []);
+  useEffect(() => () => {
+    clearStandbyTimer();
+    roomRef.current?.disconnect();
+  }, [clearStandbyTimer]);
 
   return <div className="camera-station">
     <div className="camera-header"><div><span className={`status-dot ${status}`} /><strong>{status === "live" ? "Monitoring live" : status === "connecting" ? "Opening room…" : "Camera ready"}</strong></div><code>{roomCode}</code></div>
     <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span>Motion gate</span><strong>{Math.round(motionScore * 100)}%</strong></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place the iPad where the floor, bed, or crate is visible. Keep it plugged in and this page open.</p>{status === "error" && <p className="error-text">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : "Allow camera & start"}</button></div>}</div>
-    {status === "live" && <div className="camera-controls"><div><strong>Keep Pawly visible</strong><span>Locking the iPad pauses monitoring.</span></div><button className="button button-danger" onClick={stop}>Stop monitoring</button></div>}
+    {status === "live" && <div className="camera-controls"><div><strong>Dark standby keeps monitoring active</strong><span>Do not lock the iPad—Pawly blacks out this page instead.</span></div><div className="camera-control-actions"><button className="button button-ghost camera-standby-button" onClick={enterStandby}>Dark standby now</button><button className="button button-danger" onClick={stop}>Stop monitoring</button></div></div>}
     <p className="camera-privacy">Live stream only · no continuous recording · local motion gate</p>
+    {status === "live" && standby && <button className="standby-screen" onClick={() => wakeDisplay()} aria-label="Wake the iPad monitoring display"><span className="standby-dot" /><strong>Pawly is monitoring</strong><small>Tap anywhere to show the camera for 60 seconds</small></button>}
   </div>;
 }

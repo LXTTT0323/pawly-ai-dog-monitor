@@ -22,6 +22,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const [elapsed, setElapsed] = useState(0);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [wakeSent, setWakeSent] = useState(false);
   const state = deriveState(events, connected);
 
   const connect = useCallback(async () => {
@@ -75,6 +76,17 @@ export function OwnerRoom({ roomCode }: Props) {
 
   const requestNotifications = async () => { if ("Notification" in window) await Notification.requestPermission(); };
 
+  const wakeIpadDisplay = async () => {
+    const room = roomRef.current;
+    if (!room || !connected) return;
+    await room.localParticipant.publishData(
+      new TextEncoder().encode(JSON.stringify({ type: "wake_display" })),
+      { reliable: true, topic: "pawly-command" },
+    );
+    setWakeSent(true);
+    window.setTimeout(() => setWakeSent(false), 2500);
+  };
+
   return <main className="dashboard-page">
     <nav className="dashboard-nav"><Brand /><div className="dashboard-nav-actions"><button className="icon-button" onClick={requestNotifications} title="Enable notifications">♢</button><Link className="button button-small button-ghost" href="/setup">Room settings</Link></div></nav>
     <div className="dashboard-grid">
@@ -82,7 +94,7 @@ export function OwnerRoom({ roomCode }: Props) {
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "iPad online" : "Waiting for iPad"}</span></div><code>{roomCode}</code></div>
         <div className="owner-video"><video ref={videoRef} autoPlay playsInline />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the iPad using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
         {error && <p className="error-banner">{error}</p>}
-        <div className="session-bar"><div><small>Session</small><strong>{sessionTime}</strong></div><div className="target-control"><small>Target</small><button onClick={() => setTargetMinutes(Math.max(1, targetMinutes - 1))}>−</button><strong>{targetMinutes} min</strong><button onClick={() => setTargetMinutes(Math.min(60, targetMinutes + 1))}>+</button></div><button className="button button-dark" onClick={() => void finishSession(false)}>Finish session</button></div>
+        <div className="session-bar"><div><small>Session</small><strong>{sessionTime}</strong></div><div className="target-control"><small>Target</small><button onClick={() => setTargetMinutes(Math.max(1, targetMinutes - 1))}>−</button><strong>{targetMinutes} min</strong><button onClick={() => setTargetMinutes(Math.min(60, targetMinutes + 1))}>+</button></div><button className="button button-ghost wake-ipad-button" onClick={() => void wakeIpadDisplay()} disabled={!connected}>{wakeSent ? "iPad awake for 60s" : "Wake iPad display"}</button><button className="button button-dark" onClick={() => void finishSession(false)}>Finish session</button></div>
       </section>
 
       <aside className="timeline-panel">

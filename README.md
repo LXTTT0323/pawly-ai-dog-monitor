@@ -8,6 +8,7 @@ A deployable, web-first private beta that turns an unused iPad into a live puppy
 - iPad camera and microphone capture.
 - Encrypted WebRTC live video through LiveKit.
 - Owner live dashboard on another browser/device.
+- Automatic black iPad standby after 30 seconds, with local tap or remote 60-second wake.
 - Camera pause/resume and disconnect visibility.
 - Local frame-difference motion gate with no cloud inference cost.
 - Meaningful state-transition events sent over the encrypted room data channel.
@@ -24,6 +25,12 @@ A deployable, web-first private beta that turns an unused iPad into a live puppy
 5. Open `http://localhost:3000/setup`.
 
 For a second device on the local network, serve the web app over HTTPS. Camera and microphone access are blocked on non-localhost HTTP origins.
+
+## iPad standby behavior
+
+After monitoring starts, the camera preview stays visible for 30 seconds and then Pawly covers the iPad with a nearly black standby screen. The camera, microphone, local motion gate, and live stream remain active. Tap the iPad or use **Wake iPad display** on the owner dashboard to reveal the preview for 60 seconds.
+
+Do not lock the iPad with its hardware button: iPadOS suspends browser camera capture when the device is locked. On LCD iPads, black pixels do not turn off the backlight, so lower the system brightness for the darkest result. OLED iPad Pro models benefit more from the black standby surface.
 
 ## Production environment
 
