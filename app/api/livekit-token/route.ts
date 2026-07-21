@@ -1,4 +1,4 @@
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, TrackSource } from "livekit-server-sdk";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isRoomCode } from "@/lib/domain";
@@ -18,6 +18,14 @@ export async function POST(request: Request) {
 
   const { roomCode, role } = parsed.data;
   const token = new AccessToken(apiKey, apiSecret, { identity: `${role}-${crypto.randomUUID()}`, ttl: "2h", metadata: JSON.stringify({ role }) });
-  token.addGrant({ roomJoin: true, room: `pawly-${roomCode}`, canPublish: role === "camera", canSubscribe: true, canPublishData: true });
+  token.addGrant({
+    roomJoin: true,
+    room: `pawly-${roomCode}`,
+    canPublishSources: role === "camera"
+      ? [TrackSource.CAMERA, TrackSource.MICROPHONE]
+      : [TrackSource.MICROPHONE],
+    canSubscribe: true,
+    canPublishData: true,
+  });
   return NextResponse.json({ token: await token.toJwt(), serverUrl }, { headers: { "Cache-Control": "no-store" } });
 }

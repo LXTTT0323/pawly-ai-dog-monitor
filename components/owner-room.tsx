@@ -70,6 +70,8 @@ export function OwnerRoom({ roomCode }: Props) {
   const [zoom, setZoom] = useState(1);
   const [zoomMode, setZoomMode] = useState<ZoomMode>("checking");
   const [zoomBounds, setZoomBounds] = useState({ min: 1, max: 3 });
+  const [talking, setTalking] = useState(false);
+  const [talkStatus, setTalkStatus] = useState<"ready" | "requesting" | "blocked">("ready");
   const state = deriveState(events, connected);
 
   const refreshClips = useCallback(async () => {
@@ -130,8 +132,15 @@ export function OwnerRoom({ roomCode }: Props) {
         } catch { /* ignore malformed participant data */ }
       });
       room.on(RoomEvent.ParticipantConnected, () => { setConnected(true); setZoomMode("checking"); void requestSavedClips(); void requestCameraZoom(); });
-      room.on(RoomEvent.ParticipantDisconnected, () => setConnected(room.remoteParticipants.size > 0));
-      room.on(RoomEvent.Disconnected, () => setConnected(false));
+      room.on(RoomEvent.ParticipantDisconnected, () => {
+        const cameraStillOnline = room.remoteParticipants.size > 0;
+        setConnected(cameraStillOnline);
+        if (!cameraStillOnline) {
+          void room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+          setTalking(false);
+        }
+      });
+      room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); });
       await room.connect(serverUrl, token);
       setConnected(room.remoteParticipants.size > 0);
       if (room.remoteParticipants.size > 0) { void requestSavedClips(); void requestCameraZoom(); }
@@ -179,6 +188,30 @@ export function OwnerRoom({ roomCode }: Props) {
     setListening(true);
   };
 
+  const toggleTalking = async () => {
+    const room = roomRef.current;
+    if (!room || !connected) return;
+    if (talking) {
+      await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+      setTalking(false);
+      setTalkStatus("ready");
+      return;
+    }
+    setTalkStatus("requesting");
+    try {
+      await room.localParticipant.setMicrophoneEnabled(true, {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      });
+      setTalking(true);
+      setTalkStatus("ready");
+    } catch {
+      setTalking(false);
+      setTalkStatus("blocked");
+    }
+  };
+
   const wakeIpadDisplay = async () => {
     const room = roomRef.current;
     if (!room || !connected) return;
@@ -215,7 +248,7 @@ export function OwnerRoom({ roomCode }: Props) {
     <div className="dashboard-grid">
       <section className="live-panel">
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><code>{roomCode}</code></div>
-        <div className="owner-video"><video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} /><audio ref={audioRef} autoPlay />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}{remoteAudioAvailable && !listening && <button className="listen-room-button" onClick={() => void enableListening()}>♪ Tap to hear the room</button>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
+        <div className="owner-video"><video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} /><audio ref={audioRef} autoPlay />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}{connected && <div className="voice-control-stack">{remoteAudioAvailable && !listening && <button className="listen-room-button" onClick={() => void enableListening()}>♪ Tap to hear the room</button>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
         {error && <p className="error-banner">{error}</p>}
         <div className="session-bar">
           <div><small>Observed</small><strong>{sessionTime}</strong></div>
