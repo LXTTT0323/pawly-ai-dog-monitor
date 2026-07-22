@@ -40,7 +40,7 @@ function SavedClipCard({ clip, onDelete }: { clip: SavedClip; onDelete(id: strin
     setUrl(nextUrl);
     return () => URL.revokeObjectURL(nextUrl);
   }, [clip.blob]);
-  const label = clip.trigger === "sound" ? "Sustained sound" : clip.trigger === "repeated_movement" ? "Repeated movement" : "Movement";
+  const label = clip.trigger === "sound" ? "Sustained sound" : clip.trigger === "repeated_movement" ? "Repeated dog movement" : "Dog movement";
   return <article className="saved-clip-card">
     {url && <video src={url} controls playsInline preload="metadata" />}
     <div><strong>{label}</strong><span>{new Date(clip.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {Math.round(clip.durationMs / 1000)} sec</span></div>
@@ -65,6 +65,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const [wakeSent, setWakeSent] = useState(false);
   const [remoteAudioAvailable, setRemoteAudioAvailable] = useState(false);
   const [listening, setListening] = useState(false);
+  const [cameraAudioStatus, setCameraAudioStatus] = useState<"unknown" | "on" | "off">("unknown");
   const [clips, setClips] = useState<SavedClip[]>([]);
   const [clipReceiveProgress, setClipReceiveProgress] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -108,18 +109,27 @@ export function OwnerRoom({ roomCode }: Props) {
       });
       room.on(RoomEvent.TrackSubscribed, (track) => {
         if (track.kind === Track.Kind.Video && videoRef.current) track.attach(videoRef.current);
-        if (track.kind === Track.Kind.Audio && audioRef.current) { track.attach(audioRef.current); setRemoteAudioAvailable(true); }
+        if (track.kind === Track.Kind.Audio && audioRef.current) {
+          track.attach(audioRef.current);
+          setRemoteAudioAvailable(true);
+          setCameraAudioStatus("on");
+          void room.startAudio()
+            .then(() => audioRef.current?.play())
+            .then(() => setListening(true))
+            .catch(() => setListening(false));
+        }
       });
-      room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); } track.detach(); });
+      room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("off"); } track.detach(); });
       room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
         if (topic === "pawly-camera-status") {
           try {
-            const status = JSON.parse(new TextDecoder().decode(payload)) as { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number };
+            const status = JSON.parse(new TextDecoder().decode(payload)) as { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number; enabled?: boolean };
             if (status.type === "zoom_status") {
               setZoomMode(status.supported ? "camera" : "view");
               if (status.supported && Number.isFinite(status.zoom)) setZoom(status.zoom ?? 1);
               if (status.supported && Number.isFinite(status.min) && Number.isFinite(status.max)) setZoomBounds({ min: status.min ?? 1, max: status.max ?? 3 });
             }
+            if (status.type === "audio_status") setCameraAudioStatus(status.enabled ? "on" : "off");
           } catch { /* ignore malformed camera status */ }
           return;
         }
@@ -138,15 +148,26 @@ export function OwnerRoom({ roomCode }: Props) {
         if (!cameraStillOnline) {
           void room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
           setTalking(false);
+          setRemoteAudioAvailable(false);
+          setListening(false);
+          setCameraAudioStatus("unknown");
         }
       });
-      room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); });
+      room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("unknown"); });
       await room.connect(serverUrl, token);
       setConnected(room.remoteParticipants.size > 0);
       if (room.remoteParticipants.size > 0) { void requestSavedClips(); void requestCameraZoom(); }
       for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) {
         if (publication.track?.kind === Track.Kind.Video && videoRef.current) publication.track.attach(videoRef.current);
-        if (publication.track?.kind === Track.Kind.Audio && audioRef.current) { publication.track.attach(audioRef.current); setRemoteAudioAvailable(true); }
+        if (publication.track?.kind === Track.Kind.Audio && audioRef.current) {
+          publication.track.attach(audioRef.current);
+          setRemoteAudioAvailable(true);
+          setCameraAudioStatus("on");
+          void room.startAudio()
+            .then(() => audioRef.current?.play())
+            .then(() => setListening(true))
+            .catch(() => setListening(false));
+        }
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not join room"); }
   }, [refreshClips, roomCode]);
@@ -180,12 +201,23 @@ export function OwnerRoom({ roomCode }: Props) {
 
   const requestNotifications = async () => { if ("Notification" in window) await Notification.requestPermission(); };
 
-  const enableListening = async () => {
+  const toggleListening = async () => {
     const room = roomRef.current;
-    if (!room) return;
-    await room.startAudio();
-    await audioRef.current?.play().catch(() => undefined);
-    setListening(true);
+    const element = audioRef.current;
+    if (!room || !element || !remoteAudioAvailable) return;
+    if (listening) {
+      element.pause();
+      setListening(false);
+      return;
+    }
+    try {
+      await room.startAudio();
+      await element.play();
+      setListening(true);
+    } catch {
+      setListening(false);
+      setError("Tap the room sound button again and allow audio playback in this browser.");
+    }
   };
 
   const toggleTalking = async () => {
@@ -248,7 +280,7 @@ export function OwnerRoom({ roomCode }: Props) {
     <div className="dashboard-grid">
       <section className="live-panel">
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><code>{roomCode}</code></div>
-        <div className="owner-video"><video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} /><audio ref={audioRef} autoPlay />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}{connected && <div className="voice-control-stack">{remoteAudioAvailable && !listening && <button className="listen-room-button" onClick={() => void enableListening()}>♪ Tap to hear the room</button>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
+        <div className="owner-video"><video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} /><audio ref={audioRef} autoPlay playsInline />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}{connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} onClick={() => void toggleListening()}>{listening ? "♪ Room sound on · tap to mute" : "♪ Tap to hear the room"}</button> : <span className="room-audio-status">{cameraAudioStatus === "off" ? "Room mic is off on the camera" : "Waiting for room sound…"}</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
         {error && <p className="error-banner">{error}</p>}
         <div className="session-bar">
           <div><small>Observed</small><strong>{sessionTime}</strong></div>
@@ -263,7 +295,7 @@ export function OwnerRoom({ roomCode }: Props) {
 
       <aside className="timeline-panel">
         <div className="timeline-heading"><div><span className="eyebrow">Live timeline</span><h2>What matters</h2></div><span className="event-count">{events.length}</span></div>
-        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><p>Dog visibility, sustained sound, and meaningful movement changes will appear here. Ordinary frame noise is ignored.</p></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Local motion score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
+        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><p>Dog visibility, sustained sound, and tracked dog movement will appear here. Moving the camera itself is ignored.</p></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Dog movement score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
         <section className="saved-clips-section"><div className="saved-clips-heading"><div><strong>Saved moments</strong><span>12-second event clips · this device</span></div><b>{clips.length}</b></div>{clipReceiveProgress != null && <div className="clip-progress"><span style={{ width: `${Math.round(clipReceiveProgress * 100)}%` }} /></div>}<div className="saved-clips-list">{clips.length === 0 ? <p>Movement or sustained sound can automatically save a short clip here.</p> : clips.slice(0, 4).map((clip) => <SavedClipCard key={clip.id} clip={clip} onDelete={(id) => void removeClip(id)} />)}</div></section>
         <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>AI behavior summary</strong><p>Uses timestamped event text only. Video clips and the live feed are never sent to the model.</p></div></div><button className="button button-ghost full" onClick={() => void finishSession(true)} disabled={summaryLoading}>{summaryLoading ? "Summarizing…" : "Summarize behavior"}</button></div>
       </aside>

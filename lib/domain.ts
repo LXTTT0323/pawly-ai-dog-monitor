@@ -52,13 +52,13 @@ export function isRoomCode(value: string): boolean {
 export function eventMessage(type: EventType): string {
   const messages: Record<EventType, string> = {
     monitoring_started: "Monitoring started",
-    motion_active: "Movement increased",
-    settled: "The room became calm again",
+    motion_active: "Dog movement increased",
+    settled: "Dog settled again",
     dog_visible: "Dog detected in the room",
     dog_not_visible: "Dog is out of view",
     sound_active: "Sustained sound noticed",
     sound_settled: "The room became quiet again",
-    repeated_movement: "Repeated movement pattern noticed",
+    repeated_movement: "Repeated dog movement noticed",
     camera_paused: "Camera page is not visible",
     camera_resumed: "Camera monitoring resumed",
     camera_stopped: "Camera stopped monitoring",

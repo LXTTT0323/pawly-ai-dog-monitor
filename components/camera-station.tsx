@@ -33,6 +33,8 @@ export function CameraStation({ roomCode }: Props) {
   const dogDetectorRef = useRef<DogDetectorController | null>(null);
   const behaviorTrackerRef = useRef(new BehaviorTracker());
   const dogVisibilityRef = useRef<{ candidate: boolean | null; count: number; published: boolean | null }>({ candidate: null, count: 0, published: null });
+  const sceneMotionScoreRef = useRef(0);
+  const audioEnabledRef = useRef(false);
   const [status, setStatus] = useState<"idle" | "connecting" | "live" | "error">("idle");
   const [standby, setStandby] = useState(false);
   const [error, setError] = useState("");
@@ -42,8 +44,6 @@ export function CameraStation({ roomCode }: Props) {
   const [dogStatus, setDogStatus] = useState<DogDetectorStatus>("loading");
   const [dogReading, setDogReading] = useState<DogReading | null>(null);
   const [motionScore, setMotionScore] = useState(0);
-  const lastStateRef = useRef<"active" | "settled">("settled");
-  const sustainedRef = useRef({ activeMs: 0, settledMs: 0 });
   const lastAudioStateRef = useRef<"active" | "settled">("settled");
   const sustainedAudioRef = useRef({ activeMs: 0, settledMs: 0 });
   const clipRecordingRef = useRef(false);
@@ -63,6 +63,15 @@ export function CameraStation({ roomCode }: Props) {
     if (!room?.localParticipant) return;
     await room.localParticipant.publishData(
       new TextEncoder().encode(JSON.stringify({ type: "zoom_status", supported, zoom, min: range?.min ?? 1, max: range?.max ?? 3 })),
+      { reliable: true, topic: "pawly-camera-status" },
+    );
+  }, []);
+
+  const publishAudioStatus = useCallback(async (enabled: boolean) => {
+    const room = roomRef.current;
+    if (!room?.localParticipant) return;
+    await room.localParticipant.publishData(
+      new TextEncoder().encode(JSON.stringify({ type: "audio_status", enabled })),
       { reliable: true, topic: "pawly-camera-status" },
     );
   }, []);
@@ -155,13 +164,15 @@ export function CameraStation({ roomCode }: Props) {
     clearStandbyTimer();
     setStandby(false);
     setAudioEnabled(false);
+    audioEnabledRef.current = false;
     setAudioStatus("off");
+    await publishAudioStatus(false).catch(() => undefined);
     await publishEvent("camera_stopped");
     roomRef.current?.disconnect();
     roomRef.current = null;
     await wakeLockRef.current?.release().catch(() => undefined);
     setStatus("idle");
-  }, [clearStandbyTimer, publishEvent]);
+  }, [clearStandbyTimer, publishAudioStatus, publishEvent]);
 
   const enableAudio = useCallback(async () => {
     const room = roomRef.current;
@@ -170,25 +181,47 @@ export function CameraStation({ roomCode }: Props) {
     try {
       await room.localParticipant.setMicrophoneEnabled(true, { echoCancellation: true, noiseSuppression: true });
       setAudioEnabled(true);
+      audioEnabledRef.current = true;
       setAudioStatus("on");
+      await publishAudioStatus(true);
     } catch {
       setAudioEnabled(false);
+      audioEnabledRef.current = false;
       setAudioStatus("blocked");
+      await publishAudioStatus(false).catch(() => undefined);
     }
-  }, []);
+  }, [publishAudioStatus]);
 
   const disableAudio = useCallback(async () => {
     const room = roomRef.current;
     if (!room) return;
     await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
     setAudioEnabled(false);
+    audioEnabledRef.current = false;
     setAudioStatus("off");
     setAudioLevel(0);
-  }, []);
+    await publishAudioStatus(false).catch(() => undefined);
+  }, [publishAudioStatus]);
 
   const start = useCallback(async () => {
     setStatus("connecting"); setError("");
+    setAudioStatus("requesting");
+    let preparedStream: MediaStream | null = null;
     try {
+      // Ask for camera and microphone together while the user's tap is still
+      // active. This is substantially more reliable on iPadOS than requesting
+      // the microphone after the network connection has completed.
+      try {
+        preparedStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      } catch {
+        preparedStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+      }
       const tokenResponse = await fetch("/api/livekit-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomCode, role: "camera" }) });
       if (!tokenResponse.ok) throw new Error((await tokenResponse.json()).error ?? "Could not open the private room");
       const { token, serverUrl } = await tokenResponse.json();
@@ -215,40 +248,51 @@ export function CameraStation({ roomCode }: Props) {
         track.detach();
         setOwnerVoiceActive(false);
       });
+      room.on(RoomEvent.ParticipantConnected, () => {
+        void publishAudioStatus(audioEnabledRef.current);
+      });
       await room.connect(serverUrl, token);
       await room.startAudio().catch(() => undefined);
-      try {
-        await room.localParticipant.setCameraEnabled(true, { facingMode: "environment" });
-      } catch {
-        // Desktop cameras and some iOS browsers reject a rear-camera preference.
-        // Retry with the device default instead of failing the whole session.
-        await room.localParticipant.setCameraEnabled(true);
+      const videoTrack = preparedStream.getVideoTracks()[0];
+      if (!videoTrack) throw new Error("No usable camera was found on this device.");
+      await room.localParticipant.publishTrack(videoTrack, { source: Track.Source.Camera });
+      const microphoneTrack = preparedStream.getAudioTracks()[0];
+      if (microphoneTrack) {
+        await room.localParticipant.publishTrack(microphoneTrack, { source: Track.Source.Microphone });
+        setAudioEnabled(true);
+        audioEnabledRef.current = true;
+        setAudioStatus("on");
+      } else {
+        setAudioEnabled(false);
+        audioEnabledRef.current = false;
+        setAudioStatus("blocked");
       }
       const publication = room.localParticipant.getTrackPublication(Track.Source.Camera);
       if (videoRef.current && publication?.track) publication.track.attach(videoRef.current);
+      await publishAudioStatus(audioEnabledRef.current).catch(() => undefined);
       void applyCameraZoom(1);
       await requestWakeLock();
       setStatus("live");
       wakeDisplay(30_000);
       await publishEvent("monitoring_started");
-      void enableAudio();
     } catch (cause) {
+      preparedStream?.getTracks().forEach((track) => track.stop());
       roomRef.current?.disconnect(); roomRef.current = null;
+      setAudioEnabled(false);
+      audioEnabledRef.current = false;
+      setAudioStatus("off");
       setError(cameraErrorMessage(cause)); setStatus("error");
     }
-  }, [applyCameraZoom, enableAudio, publishEvent, requestWakeLock, roomCode, sendSavedClips, wakeDisplay]);
+  }, [applyCameraZoom, publishAudioStatus, publishEvent, requestWakeLock, roomCode, sendSavedClips, wakeDisplay]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
     return startMotionAnalyzer(videoRef.current, ({ score, active, intervalMs }) => {
       setMotionScore(score);
+      sceneMotionScoreRef.current = score;
       dogDetectorRef.current?.setMotionActive(active);
-      if (active) { sustainedRef.current.activeMs += intervalMs; sustainedRef.current.settledMs = 0; }
-      else { sustainedRef.current.settledMs += intervalMs; sustainedRef.current.activeMs = 0; }
-      if (sustainedRef.current.activeMs >= 2_250 && lastStateRef.current !== "active") { lastStateRef.current = "active"; void publishEvent("motion_active", score); void captureEventClip("movement"); }
-      if (sustainedRef.current.settledMs >= 12_000 && lastStateRef.current !== "settled") { lastStateRef.current = "settled"; void publishEvent("settled", score); }
     });
-  }, [captureEventClip, publishEvent, status]);
+  }, [status]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
@@ -259,14 +303,26 @@ export function CameraStation({ roomCode }: Props) {
       (reading) => {
         setDogReading(reading);
         const visibility = dogVisibilityRef.current;
+        if (reading.visible && visibility.published !== true) dogDetectorRef.current?.setMotionActive(true);
         if (visibility.candidate === reading.visible) visibility.count += 1;
         else { visibility.candidate = reading.visible; visibility.count = 1; }
-        const requiredReadings = reading.visible ? 1 : 3;
+        const requiredReadings = reading.visible ? 2 : 3;
         if (visibility.count >= requiredReadings && visibility.published !== reading.visible) {
           visibility.published = reading.visible;
           void publishEvent(reading.visible ? "dog_visible" : "dog_not_visible", undefined, Math.max(0.5, reading.confidence));
         }
-        if (behaviorTrackerRef.current.addDogReading(reading)) { void publishEvent("repeated_movement", undefined, 0.68); void captureEventClip("repeated_movement"); }
+        const behavior = behaviorTrackerRef.current.addDogReading(reading, sceneMotionScoreRef.current);
+        if (visibility.published === true && !behavior.cameraShiftIgnored) {
+          if (behavior.movementStarted) {
+            void publishEvent("motion_active", behavior.movementScore, Math.max(0.65, reading.confidence));
+            void captureEventClip("movement");
+          }
+          if (behavior.settled) void publishEvent("settled", behavior.movementScore, Math.max(0.7, reading.confidence));
+          if (behavior.repeatedMovement) {
+            void publishEvent("repeated_movement", behavior.movementScore, Math.max(0.68, reading.confidence));
+            void captureEventClip("repeated_movement");
+          }
+        }
       },
       setDogStatus,
     );
@@ -314,7 +370,7 @@ export function CameraStation({ roomCode }: Props) {
 
   return <div className="camera-station">
     <div className="camera-header"><div><span className={`status-dot ${status}`} /><strong>{status === "live" ? "Monitoring live" : status === "connecting" ? "Opening room…" : status === "error" ? "Camera needs attention" : "Camera ready"}</strong></div><code>{roomCode}</code></div>
-    <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline /><audio ref={remoteVoiceRef} autoPlay />{dogReading?.visible && dogReading.box && <div className="dog-detection-box" style={{ left: `${dogReading.box.x * 100}%`, top: `${dogReading.box.y * 100}%`, width: `${dogReading.box.width * 100}%`, height: `${dogReading.box.height * 100}%` }}><span>Dog · {Math.round(dogReading.confidence * 100)}%</span></div>}<div className="camera-analysis-stack"><div className="camera-overlay"><span>Eco motion</span><strong>{Math.round(motionScore * 100)}%</strong></div><div className={`camera-overlay dog-analysis ${dogReading?.visible ? "detected" : ""}`}><span>Dog AI</span><strong>{dogStatus === "loading" ? "Loading" : dogStatus === "unavailable" ? "Motion only" : dogReading?.visible ? `${Math.round(dogReading.confidence * 100)}% visible` : "Scanning"}</strong></div><div className={`camera-overlay sound-analysis ${audioEnabled ? "detected" : ""}`}><span>Sound</span><strong>{audioStatus === "requesting" ? "Requesting" : audioEnabled ? `${Math.round(audioLevel * 100)}%` : audioStatus === "blocked" ? "Blocked" : "Off"}</strong></div><div className={`camera-overlay clip-analysis ${clipStatus === "recording" ? "recording" : ""}`}><span>Event clip</span><strong>{clipStatus === "recording" ? "Saving 12s" : clipStatus === "saved" ? "Saved" : clipStatus === "unsupported" ? "Unavailable" : "Ready"}</strong></div><div className={`camera-overlay talkback-analysis ${ownerVoiceActive ? "detected" : ""}`}><span>Talkback</span><strong>{ownerVoiceActive ? "Owner speaking" : "Ready"}</strong></div></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place this device where the floor, bed, or crate is visible. Pawly will request camera and microphone access; video still works if sound is declined.</p>{status === "error" && <p className="error-text" role="alert">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : status === "error" ? "Try camera again" : "Allow camera, sound & start"}</button></div>}</div>
+    <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline /><audio ref={remoteVoiceRef} autoPlay />{dogReading?.visible && dogReading.box && <div className="dog-detection-box" style={{ left: `${dogReading.box.x * 100}%`, top: `${dogReading.box.y * 100}%`, width: `${dogReading.box.width * 100}%`, height: `${dogReading.box.height * 100}%` }}><span>Dog · {Math.round(dogReading.confidence * 100)}%</span></div>}<div className="camera-analysis-stack"><div className="camera-overlay"><span>Scene wake</span><strong>{Math.round(motionScore * 100)}%</strong></div><div className={`camera-overlay dog-analysis ${dogReading?.visible ? "detected" : ""}`}><span>Dog AI</span><strong>{dogStatus === "loading" ? "Loading" : dogStatus === "unavailable" ? "Unavailable" : dogReading?.visible ? `${Math.round(dogReading.confidence * 100)}% visible` : dogReading ? "Not visible" : "Scanning"}</strong></div><div className={`camera-overlay sound-analysis ${audioEnabled ? "detected" : ""}`}><span>Room mic</span><strong>{audioStatus === "requesting" ? "Requesting" : audioEnabled ? `${Math.round(audioLevel * 100)}% · on` : audioStatus === "blocked" ? "Permission needed" : "Off"}</strong></div><div className={`camera-overlay clip-analysis ${clipStatus === "recording" ? "recording" : ""}`}><span>Event clip</span><strong>{clipStatus === "recording" ? "Saving 12s" : clipStatus === "saved" ? "Saved" : clipStatus === "unsupported" ? "Unavailable" : "Ready"}</strong></div><div className={`camera-overlay talkback-analysis ${ownerVoiceActive ? "detected" : ""}`}><span>Talkback</span><strong>{ownerVoiceActive ? "Owner speaking" : "Ready"}</strong></div></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place this device where the floor, bed, or crate is visible. Pawly will request camera and microphone access; video still works if sound is declined.</p>{status === "error" && <p className="error-text" role="alert">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : status === "error" ? "Try camera again" : "Allow camera, sound & start"}</button></div>}</div>
     {status === "live" && <div className="camera-controls"><div><strong>Dark standby keeps monitoring active</strong><span>Do not lock this device—Pawly blacks out the page instead.</span></div><div className="camera-control-actions">{audioEnabled ? <button className="button button-ghost camera-standby-button" onClick={() => void disableAudio()}>Sound on · turn off</button> : <button className="button button-ghost camera-standby-button" onClick={() => void enableAudio()} disabled={audioStatus === "requesting"}>{audioStatus === "requesting" ? "Opening sound…" : audioStatus === "blocked" ? "Retry sound permission" : "Enable sound"}</button>}<button className="button button-ghost camera-standby-button" onClick={enterStandby}>Dark standby now</button><button className="button button-danger" onClick={stop}>Stop monitoring</button></div></div>}
     <p className="camera-privacy">Live video · {audioEnabled ? "sound analysis on" : "sound off"} · 12-second event clips only · saved locally · local adaptive AI</p>
     {status === "live" && standby && <button className="standby-screen" onClick={() => wakeDisplay()} aria-label="Wake the camera monitoring display"><span className="standby-dot" /><strong>Pawly is monitoring</strong><small>Tap anywhere to show the camera for 60 seconds</small></button>}

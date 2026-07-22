@@ -12,11 +12,12 @@ Pawly turns a spare phone, tablet, or laptop into a private, dog-aware room moni
 - Streams live video and optional room audio between modern browsers using LiveKit and WebRTC.
 - Detects dog presence locally with MediaPipe EfficientDet-Lite0.
 - Uses adaptive sampling so dog detection runs faster after meaningful movement and slower while the room is settled.
-- Detects meaningful motion changes and sustained sound locally without continuously uploading media to an AI model.
+- Uses whole-frame change only to wake the detector, then reports movement from the tracked dog box; moving the camera itself or an empty room does not create a dog-movement event.
+- Detects sustained sound locally without continuously uploading media to an AI model.
 - Builds a timestamped activity timeline and automatically saves 12-second event clips.
 - Stores up to 20 clips locally in the viewer browser and transfers them through the private LiveKit room.
 - Supports quick checks from 10–30 minutes and normal outings from 30 minutes to 12 hours.
-- Lets the owner hear the room, speak back to the dog, remotely wake the camera display, and zoom the live view.
+- Lets the owner hear the room with an explicit playback control, speak back to the dog, remotely wake the camera display, and zoom the live view.
 - Produces an optional GPT-5.6 behavior review from compact event text—not from raw video or audio.
 - Keeps the camera device running behind a nearly black standby surface without requiring its screen to stay visually bright.
 
