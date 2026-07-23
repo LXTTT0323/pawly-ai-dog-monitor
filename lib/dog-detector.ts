@@ -104,6 +104,7 @@ export function startDogDetector(
     onStatus("loading");
     try {
       detector?.close();
+      // MediaPipe's WASM resolver touches `document`, so initialization must stay on the browser main thread.
       const { FilesetResolver, ObjectDetector } = await import("@mediapipe/tasks-vision");
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
       detector = await ObjectDetector.createFromOptions(vision, {
