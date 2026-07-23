@@ -23,11 +23,48 @@ export interface DogDetectorController {
   stop(): void;
 }
 
-const SETTLED_INTERVAL_MS = 12_000;
+const SETTLED_INTERVAL_MS = 8_000;
 const ACTIVE_INTERVAL_MS = 1_500;
+const TRACKING_INTERVAL_MS = 700;
+const TRACKING_GRACE_MS = 3_000;
 const RETRY_INTERVAL_MS = 15_000;
 const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-tasks/object_detector/efficientdet_lite0_uint8.tflite";
+
+function clamp(value: number, minimum = 0, maximum = 1) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function paddedBox(box: DogBox): DogBox {
+  const padX = box.width * 0.045;
+  const padY = box.height * 0.055;
+  const x = clamp(box.x - padX);
+  const y = clamp(box.y - padY);
+  return {
+    x,
+    y,
+    width: clamp(box.x + box.width + padX) - x,
+    height: clamp(box.y + box.height + padY) - y,
+  };
+}
+
+function smoothBox(previous: DogBox | null, next: DogBox): DogBox {
+  if (!previous) return next;
+  const previousCenterX = previous.x + previous.width / 2;
+  const previousCenterY = previous.y + previous.height / 2;
+  const nextCenterX = next.x + next.width / 2;
+  const nextCenterY = next.y + next.height / 2;
+  const centerShift = Math.hypot(nextCenterX - previousCenterX, nextCenterY - previousCenterY);
+  const widthRatio = Math.max(next.width / Math.max(previous.width, 0.001), previous.width / Math.max(next.width, 0.001));
+  const heightRatio = Math.max(next.height / Math.max(previous.height, 0.001), previous.height / Math.max(next.height, 0.001));
+  const alpha = centerShift > 0.16 || widthRatio > 1.35 || heightRatio > 1.35 ? 0.78 : 0.48;
+  return {
+    x: previous.x + (next.x - previous.x) * alpha,
+    y: previous.y + (next.y - previous.y) * alpha,
+    width: previous.width + (next.width - previous.width) * alpha,
+    height: previous.height + (next.height - previous.height) * alpha,
+  };
+}
 
 export function startDogDetector(
   video: HTMLVideoElement,
@@ -46,11 +83,16 @@ export function startDogDetector(
   let initializing = false;
   let inFlight = false;
   let activeUntil = 0;
+  let trackingUntil = 0;
+  let lastBox: DogBox | null = null;
+  let lastConfidence = 0;
+  let consecutiveMisses = 0;
 
   const schedule = (delay?: number) => {
     if (stopped) return;
     if (timer != null) window.clearTimeout(timer);
-    const interval = Date.now() < activeUntil ? ACTIVE_INTERVAL_MS : SETTLED_INTERVAL_MS;
+    const now = Date.now();
+    const interval = now < trackingUntil ? TRACKING_INTERVAL_MS : now < activeUntil ? ACTIVE_INTERVAL_MS : SETTLED_INTERVAL_MS;
     timer = window.setTimeout(capture, delay ?? interval);
   };
 
@@ -72,17 +114,36 @@ export function startDogDetector(
         .filter((item) => item.categoryName.toLowerCase() === "dog")
         .sort((left, right) => right.score - left.score)[0];
       const box = candidate?.boundingBox;
+      let readingBox: DogBox | null = null;
+      let visible = false;
+      let confidence = category?.score ?? 0;
+      if (candidate && box) {
+        const nextBox = paddedBox({
+          x: box.originX / canvas.width,
+          y: box.originY / canvas.height,
+          width: box.width / canvas.width,
+          height: box.height / canvas.height,
+        });
+        lastBox = smoothBox(lastBox, nextBox);
+        lastConfidence = confidence;
+        consecutiveMisses = 0;
+        trackingUntil = Date.now() + TRACKING_GRACE_MS;
+        readingBox = lastBox;
+        visible = true;
+      } else if (lastBox && Date.now() < trackingUntil) {
+        consecutiveMisses += 1;
+        confidence = lastConfidence * Math.pow(0.86, consecutiveMisses);
+        readingBox = lastBox;
+        visible = true;
+      } else {
+        consecutiveMisses = 0;
+        lastBox = null;
+        lastConfidence = 0;
+      }
       onReading({
-        visible: Boolean(candidate && box),
-        confidence: category?.score ?? 0,
-        box: box
-          ? {
-              x: box.originX / canvas.width,
-              y: box.originY / canvas.height,
-              width: box.width / canvas.width,
-              height: box.height / canvas.height,
-            }
-          : null,
+        visible,
+        confidence,
+        box: readingBox,
         inferenceMs: performance.now() - startedAt,
         observedAt: Date.now(),
       });
@@ -112,7 +173,7 @@ export function startDogDetector(
         runningMode: "IMAGE",
         categoryAllowlist: ["dog"],
         maxResults: 3,
-        scoreThreshold: 0.25,
+        scoreThreshold: 0.2,
       });
       if (stopped) {
         detector.close();
