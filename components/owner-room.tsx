@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Brand } from "./brand";
 import { clipFileName, deleteClip, listSavedClips, parseClipFileName, saveClip, type SavedClip } from "@/lib/clip-store";
 import type { PawlyEvent, SessionKind, SessionSummary } from "@/lib/domain";
+import type { DogBox } from "@/lib/dog-detector";
 import { deriveState, summarizeWithRules } from "@/lib/session-engine";
 
 interface Props { roomCode: string; }
@@ -22,6 +23,21 @@ function durationLabel(minutes: number) {
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
+}
+
+function coverBoxStyle(box: DogBox, video: HTMLVideoElement | null) {
+  if (!video?.videoWidth || !video.videoHeight || !video.clientWidth || !video.clientHeight) {
+    return { left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` };
+  }
+  const scale = Math.max(video.clientWidth / video.videoWidth, video.clientHeight / video.videoHeight);
+  const renderedWidth = video.videoWidth * scale;
+  const renderedHeight = video.videoHeight * scale;
+  return {
+    left: (video.clientWidth - renderedWidth) / 2 + box.x * renderedWidth,
+    top: (video.clientHeight - renderedHeight) / 2 + box.y * renderedHeight,
+    width: box.width * renderedWidth,
+    height: box.height * renderedHeight,
+  };
 }
 
 function eventSymbol(type: PawlyEvent["type"]) {
@@ -74,6 +90,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const [zoomBounds, setZoomBounds] = useState({ min: 1, max: 3 });
   const [talking, setTalking] = useState(false);
   const [talkStatus, setTalkStatus] = useState<"ready" | "requesting" | "blocked">("ready");
+  const [dogTrack, setDogTrack] = useState<{ visible: boolean; confidence: number; box: DogBox | null } | null>(null);
   const state = deriveState(events, connected);
 
   const refreshClips = useCallback(async () => {
@@ -121,6 +138,17 @@ export function OwnerRoom({ roomCode }: Props) {
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("off"); } track.detach(); });
       room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+        if (topic === "pawly-dog-track") {
+          try {
+            const reading = JSON.parse(new TextDecoder().decode(payload)) as { visible?: boolean; confidence?: number; box?: DogBox | null };
+            setDogTrack({
+              visible: reading.visible === true,
+              confidence: Number.isFinite(reading.confidence) ? reading.confidence ?? 0 : 0,
+              box: reading.box ?? null,
+            });
+          } catch { /* ignore malformed tracking data */ }
+          return;
+        }
         if (topic === "pawly-camera-status") {
           try {
             const status = JSON.parse(new TextDecoder().decode(payload)) as { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number; enabled?: boolean };
@@ -154,9 +182,10 @@ export function OwnerRoom({ roomCode }: Props) {
           setRemoteAudioAvailable(false);
           setListening(false);
           setCameraAudioStatus("unknown");
+          setDogTrack(null);
         }
       });
-      room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("unknown"); });
+      room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("unknown"); setDogTrack(null); });
       await room.connect(serverUrl, token);
       setConnected(room.remoteParticipants.size > 0);
       if (room.remoteParticipants.size > 0) { void requestSavedClips(); void requestCameraZoom(); }
@@ -305,7 +334,21 @@ export function OwnerRoom({ roomCode }: Props) {
     <div className="dashboard-grid">
       <section className="live-panel">
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><code>{roomCode}</code></div>
-        <div className="owner-video"><video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} /><audio ref={audioRef} playsInline />{!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}{connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}{connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} aria-pressed={listening} onClick={() => void toggleListening()}>{listening ? "♪ Room sound · On" : "♪ Room sound · Off"}</button> : cameraAudioStatus === "off" ? <button className={`room-audio-status room-audio-action ${roomSoundRequest === "sent" ? "sent" : ""}`} onClick={() => void requestRoomSound()} disabled={roomSoundRequest === "requesting"}>{roomSoundRequest === "requesting" ? "Requesting room sound…" : roomSoundRequest === "sent" ? "Check the iPad to allow sound" : "Turn on room sound"}</button> : <span className="room-audio-status">Waiting for room sound…</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}<div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div></div>
+        <div className="owner-video">
+          <video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} />
+          <audio ref={audioRef} playsInline />
+          {connected && dogTrack?.visible && dogTrack.box && (
+            <div className="dog-track-layer" style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }}>
+              <div className="dog-detection-box" style={coverBoxStyle(dogTrack.box, videoRef.current)}>
+                <span>Dog · {Math.round(dogTrack.confidence * 100)}%</span>
+              </div>
+            </div>
+          )}
+          {!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}
+          {connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}
+          {connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} aria-pressed={listening} onClick={() => void toggleListening()}>{listening ? "♪ Room sound · On" : "♪ Room sound · Off"}</button> : cameraAudioStatus === "off" ? <button className={`room-audio-status room-audio-action ${roomSoundRequest === "sent" ? "sent" : ""}`} onClick={() => void requestRoomSound()} disabled={roomSoundRequest === "requesting"}>{roomSoundRequest === "requesting" ? "Requesting room sound…" : roomSoundRequest === "sent" ? "Check the iPad to allow sound" : "Turn on room sound"}</button> : <span className="room-audio-status">Waiting for room sound…</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}
+          <div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div>
+        </div>
         {error && <p className="error-banner">{error}</p>}
         <div className="session-bar">
           <div><small>Observed</small><strong>{sessionTime}</strong></div>

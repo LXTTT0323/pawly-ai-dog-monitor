@@ -99,6 +99,20 @@ export function CameraStation({ roomCode }: Props) {
     );
   }, []);
 
+  const publishDogTrack = useCallback(async (reading: DogReading) => {
+    const room = roomRef.current;
+    if (!room?.localParticipant) return;
+    await room.localParticipant.publishData(
+      new TextEncoder().encode(JSON.stringify({
+        visible: reading.visible,
+        confidence: reading.confidence,
+        box: reading.box,
+        observedAt: reading.observedAt,
+      })),
+      { reliable: false, topic: "pawly-dog-track" },
+    );
+  }, []);
+
   const applyCameraZoom = useCallback(async (requestedZoom: number) => {
     const mediaTrack = roomRef.current?.localParticipant.getTrackPublication(Track.Source.Camera)?.track?.mediaStreamTrack;
     if (!mediaTrack) return;
@@ -333,6 +347,7 @@ export function CameraStation({ roomCode }: Props) {
       videoRef.current,
       (reading) => {
         setDogReading(reading);
+        void publishDogTrack(reading);
         const visibility = dogVisibilityRef.current;
         if (reading.visible && visibility.published !== true) dogDetectorRef.current?.setMotionActive(true);
         if (visibility.candidate === reading.visible) visibility.count += 1;
@@ -362,7 +377,7 @@ export function CameraStation({ roomCode }: Props) {
       controller.stop();
       dogDetectorRef.current = null;
     };
-  }, [captureEventClip, publishEvent, status]);
+  }, [captureEventClip, publishDogTrack, publishEvent, status]);
 
   useEffect(() => {
     if (status !== "live" || !audioEnabled) return;
