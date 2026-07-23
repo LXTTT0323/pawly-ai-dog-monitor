@@ -53,6 +53,7 @@ export function CameraStation({ roomCode }: Props) {
   const wakeLockRef = useRef<{ release(): Promise<void> } | null>(null);
   const standbyTimerRef = useRef<number | null>(null);
   const dogDetectorRef = useRef<DogDetectorController | null>(null);
+  const eventHistoryRef = useRef<PawlyEvent[]>([]);
   const behaviorTrackerRef = useRef(new BehaviorTracker());
   const dogVisibilityRef = useRef<{ candidate: boolean | null; count: number; published: boolean | null }>({ candidate: null, count: 0, published: null });
   const sceneMotionScoreRef = useRef(0);
@@ -74,12 +75,25 @@ export function CameraStation({ roomCode }: Props) {
   const [clipStatus, setClipStatus] = useState<"ready" | "recording" | "saved" | "unsupported">("ready");
   const [ownerVoiceActive, setOwnerVoiceActive] = useState(false);
 
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(`pawly-camera-events-${roomCode}`) ?? "[]");
+      eventHistoryRef.current = Array.isArray(saved) ? saved.slice(0, 100) : [];
+    } catch {
+      eventHistoryRef.current = [];
+    }
+  }, [roomCode]);
+
   const publishEvent = useCallback(async (type: EventType, score?: number, confidenceOverride?: number) => {
+    const event: PawlyEvent = { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), confidence: confidenceOverride ?? (type === "motion_active" ? 0.72 : 0.95), motionScore: score, message: eventMessage(type) };
+    eventHistoryRef.current = [event, ...eventHistoryRef.current].slice(0, 100);
+    try {
+      localStorage.setItem(`pawly-camera-events-${roomCode}`, JSON.stringify(eventHistoryRef.current));
+    } catch { /* The live event still works if local history storage is unavailable. */ }
     const room = roomRef.current;
     if (!room?.localParticipant) return;
-    const event: PawlyEvent = { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), confidence: confidenceOverride ?? (type === "motion_active" ? 0.72 : 0.95), motionScore: score, message: eventMessage(type) };
     await room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(event)), { reliable: true, topic: "pawly-event" });
-  }, []);
+  }, [roomCode]);
 
   const publishZoomStatus = useCallback(async (supported: boolean, zoom = 1, range?: ZoomRange) => {
     const room = roomRef.current;
@@ -149,6 +163,19 @@ export function CameraStation({ roomCode }: Props) {
       await sendClip(clip, destinationIdentity ? [destinationIdentity] : undefined).catch(() => undefined);
     }
   }, [roomCode, sendClip]);
+
+  const sendEventHistory = useCallback(async (destinationIdentity?: string) => {
+    const room = roomRef.current;
+    if (!room?.localParticipant) return;
+    await room.localParticipant.publishData(
+      new TextEncoder().encode(JSON.stringify(eventHistoryRef.current.slice(0, 50))),
+      {
+        reliable: true,
+        topic: "pawly-event-history",
+        destinationIdentities: destinationIdentity ? [destinationIdentity] : undefined,
+      },
+    );
+  }, []);
 
   const captureEventClip = useCallback(async (trigger: ClipTrigger) => {
     const now = Date.now();
@@ -277,6 +304,7 @@ export function CameraStation({ roomCode }: Props) {
             void enableAudio();
           }
           if (command.type === "request_saved_clips") void sendSavedClips(participant?.identity);
+          if (command.type === "request_event_history") void sendEventHistory(participant?.identity);
           if (command.type === "set_zoom" && Number.isFinite(command.zoom)) void applyCameraZoom(command.zoom ?? 1);
         } catch { /* Ignore malformed remote commands. */ }
       });
@@ -328,7 +356,7 @@ export function CameraStation({ roomCode }: Props) {
       setAudioStatus("off");
       setError(cameraErrorMessage(cause)); setStatus("error");
     }
-  }, [applyCameraZoom, enableAudio, publishAudioStatus, publishEvent, requestWakeLock, roomCode, sendSavedClips, wakeDisplay]);
+  }, [applyCameraZoom, enableAudio, publishAudioStatus, publishEvent, requestWakeLock, roomCode, sendEventHistory, sendSavedClips, wakeDisplay]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;

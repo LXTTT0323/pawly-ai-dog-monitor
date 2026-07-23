@@ -40,6 +40,26 @@ function coverBoxStyle(box: DogBox, video: HTMLVideoElement | null) {
   };
 }
 
+async function requestSessionSummary(
+  events: PawlyEvent[],
+  startedAt: number,
+  targetMinutes: number,
+  sessionKind: SessionKind,
+) {
+  const fallback = summarizeWithRules(events, startedAt, Date.now(), targetMinutes, sessionKind);
+  try {
+    const response = await fetch("/api/session-summary", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dogName: "Your puppy", sessionKind, targetMinutes, startedAt, events }),
+    });
+    if (!response.ok) throw new Error("AI summary unavailable");
+    return await response.json() as SessionSummary;
+  } catch {
+    return fallback;
+  }
+}
+
 function eventSymbol(type: PawlyEvent["type"]) {
   if (type === "motion_active" || type === "repeated_movement") return "↗";
   if (type === "sound_active") return "♪";
@@ -78,6 +98,8 @@ export function OwnerRoom({ roomCode }: Props) {
   const [elapsed, setElapsed] = useState(0);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [arrivalSummary, setArrivalSummary] = useState<SessionSummary | null>(null);
+  const [arrivalSummaryLoading, setArrivalSummaryLoading] = useState(false);
   const [wakeSent, setWakeSent] = useState(false);
   const [remoteAudioAvailable, setRemoteAudioAvailable] = useState(false);
   const [listening, setListening] = useState(false);
@@ -91,6 +113,9 @@ export function OwnerRoom({ roomCode }: Props) {
   const [talking, setTalking] = useState(false);
   const [talkStatus, setTalkStatus] = useState<"ready" | "requesting" | "blocked">("ready");
   const [dogTrack, setDogTrack] = useState<{ visible: boolean; confidence: number; box: DogBox | null } | null>(null);
+  const reviewSinceRef = useRef(Date.now() - 4 * 60 * 60 * 1000);
+  const autoSummaryRequestedRef = useRef(false);
+  const sessionSettingsRef = useRef({ sessionKind, targetMinutes });
   const state = deriveState(events, connected);
 
   const refreshClips = useCallback(async () => {
@@ -98,6 +123,15 @@ export function OwnerRoom({ roomCode }: Props) {
   }, [roomCode]);
 
   useEffect(() => { void refreshClips(); }, [refreshClips]);
+  useEffect(() => {
+    sessionSettingsRef.current = { sessionKind, targetMinutes };
+  }, [sessionKind, targetMinutes]);
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(`pawly-last-review-${roomCode}`));
+      if (Number.isFinite(saved) && saved > Date.now() - 24 * 60 * 60 * 1000) reviewSinceRef.current = saved;
+    } catch { /* A four-hour recap window remains available without local storage. */ }
+  }, [roomCode]);
 
   const connect = useCallback(async () => {
     setError("");
@@ -109,6 +143,10 @@ export function OwnerRoom({ roomCode }: Props) {
       roomRef.current = room;
       const requestSavedClips = () => room.localParticipant.publishData(
         new TextEncoder().encode(JSON.stringify({ type: "request_saved_clips" })),
+        { reliable: true, topic: "pawly-command" },
+      );
+      const requestEventHistory = () => room.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify({ type: "request_event_history" })),
         { reliable: true, topic: "pawly-command" },
       );
       const requestCameraZoom = () => room.localParticipant.publishData(
@@ -138,6 +176,38 @@ export function OwnerRoom({ roomCode }: Props) {
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("off"); } track.detach(); });
       room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+        if (topic === "pawly-event-history") {
+          try {
+            const history = JSON.parse(new TextDecoder().decode(payload)) as PawlyEvent[];
+            if (!Array.isArray(history)) return;
+            setEvents((current) => {
+              const unique = new Map([...history, ...current].map((event) => [event.id, event]));
+              return [...unique.values()].sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt)).slice(0, 100);
+            });
+            if (!autoSummaryRequestedRef.current) {
+              autoSummaryRequestedRef.current = true;
+              const now = Date.now();
+              const recent = history
+                .filter((event) => {
+                  const timestamp = Date.parse(event.occurredAt);
+                  return Number.isFinite(timestamp) && timestamp >= reviewSinceRef.current && timestamp <= now;
+                })
+                .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt));
+              const settings = sessionSettingsRef.current;
+              const recapStartedAt = recent.length
+                ? Math.min(...recent.map((event) => Date.parse(event.occurredAt)))
+                : Math.max(reviewSinceRef.current, now - 5 * 60 * 1000);
+              setArrivalSummaryLoading(true);
+              void requestSessionSummary(recent, recapStartedAt, settings.targetMinutes, settings.sessionKind)
+                .then(setArrivalSummary)
+                .finally(() => setArrivalSummaryLoading(false));
+              try {
+                localStorage.setItem(`pawly-last-review-${roomCode}`, String(now));
+              } catch { /* Recap still works when visit state cannot be persisted. */ }
+            }
+          } catch { /* ignore malformed event history */ }
+          return;
+        }
         if (topic === "pawly-dog-track") {
           try {
             const reading = JSON.parse(new TextDecoder().decode(payload)) as { visible?: boolean; confidence?: number; box?: DogBox | null };
@@ -172,7 +242,7 @@ export function OwnerRoom({ roomCode }: Props) {
           if (document.hidden && noteworthy && Notification.permission === "granted") new Notification(event.message, { body: "Open Pawly to check the room timeline." });
         } catch { /* ignore malformed participant data */ }
       });
-      room.on(RoomEvent.ParticipantConnected, () => { setConnected(true); setZoomMode("checking"); void requestSavedClips(); void requestCameraZoom(); });
+      room.on(RoomEvent.ParticipantConnected, () => { setConnected(true); setZoomMode("checking"); void requestSavedClips(); void requestEventHistory(); void requestCameraZoom(); });
       room.on(RoomEvent.ParticipantDisconnected, () => {
         const cameraStillOnline = room.remoteParticipants.size > 0;
         setConnected(cameraStillOnline);
@@ -188,7 +258,7 @@ export function OwnerRoom({ roomCode }: Props) {
       room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("unknown"); setDogTrack(null); });
       await room.connect(serverUrl, token);
       setConnected(room.remoteParticipants.size > 0);
-      if (room.remoteParticipants.size > 0) { void requestSavedClips(); void requestCameraZoom(); }
+      if (room.remoteParticipants.size > 0) { void requestSavedClips(); void requestEventHistory(); void requestCameraZoom(); }
       for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) {
         if (publication.track?.kind === Track.Kind.Video && videoRef.current) publication.track.attach(videoRef.current);
         if (publication.track?.kind === Track.Kind.Audio && audioRef.current) {
@@ -224,9 +294,7 @@ export function OwnerRoom({ roomCode }: Props) {
     if (!useAi) { setSummary(rulesSummary); return; }
     setSummaryLoading(true);
     try {
-      const response = await fetch("/api/session-summary", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dogName: "Your puppy", sessionKind, targetMinutes, startedAt, events }) });
-      if (!response.ok) throw new Error("AI summary unavailable");
-      setSummary(await response.json());
+      setSummary(await requestSessionSummary(events, startedAt, targetMinutes, sessionKind));
     } catch { setSummary(rulesSummary); } finally { setSummaryLoading(false); }
   };
 
@@ -363,8 +431,22 @@ export function OwnerRoom({ roomCode }: Props) {
 
       <aside className="timeline-panel">
         <div className="timeline-heading"><div><span className="eyebrow">Live timeline</span><h2>What matters</h2></div><span className="event-count">{events.length}</span></div>
+        <section className="arrival-recap-card" aria-live="polite">
+          <span className="eyebrow">Since your last check</span>
+          {arrivalSummaryLoading ? (
+            <p>Reviewing recent movement, sound events, and saved moments…</p>
+          ) : arrivalSummary ? (
+            <>
+              <strong>{arrivalSummary.headline}</strong>
+              <p>{arrivalSummary.behaviorSummary}</p>
+              <button onClick={() => setSummary(arrivalSummary)}>Open full recap</button>
+            </>
+          ) : (
+            <p>Your latest activity recap will appear when the camera connects.</p>
+          )}
+        </section>
         <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><p>Dog visibility, sustained sound, and tracked dog movement will appear here. Moving the camera itself is ignored.</p></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Dog movement score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
-        <section className="saved-clips-section"><div className="saved-clips-heading"><div><strong>Saved moments</strong><span>12-second event clips · this device</span></div><b>{clips.length}</b></div>{clipReceiveProgress != null && <div className="clip-progress"><span style={{ width: `${Math.round(clipReceiveProgress * 100)}%` }} /></div>}<div className="saved-clips-list">{clips.length === 0 ? <p>Movement or sustained sound can automatically save a short clip here.</p> : clips.slice(0, 4).map((clip) => <SavedClipCard key={clip.id} clip={clip} onDelete={(id) => void removeClip(id)} />)}</div></section>
+        <section className="saved-clips-section"><div className="saved-clips-heading"><div><strong>Recent activity replay</strong><span>12-second detected moments · this device</span></div><b>{clips.length}</b></div>{clipReceiveProgress != null && <div className="clip-progress"><span style={{ width: `${Math.round(clipReceiveProgress * 100)}%` }} /></div>}<div className="saved-clips-list">{clips.length === 0 ? <p>Movement or sustained sound can automatically save a short replay here.</p> : clips.slice(0, 4).map((clip) => <SavedClipCard key={clip.id} clip={clip} onDelete={(id) => void removeClip(id)} />)}</div></section>
         <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>AI behavior summary</strong><p>Uses timestamped event text only. Video clips and the live feed are never sent to the model.</p></div></div><button className="button button-ghost full" onClick={() => void finishSession(true)} disabled={summaryLoading}>{summaryLoading ? "Summarizing…" : "Summarize behavior"}</button></div>
       </aside>
     </div>
