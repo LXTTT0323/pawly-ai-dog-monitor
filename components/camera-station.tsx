@@ -57,6 +57,9 @@ export function CameraStation({ roomCode }: Props) {
   const behaviorTrackerRef = useRef(new BehaviorTracker());
   const dogVisibilityRef = useRef<{ candidate: boolean | null; count: number; published: boolean | null }>({ candidate: null, count: 0, published: null });
   const sceneMotionScoreRef = useRef(0);
+  const cameraShiftUntilRef = useRef(0);
+  const cameraRecoveryRef = useRef({ pending: false, stableDogReadings: 0 });
+  const lastCameraRepositionEventRef = useRef(0);
   const audioEnabledRef = useRef(false);
   const [status, setStatus] = useState<"idle" | "connecting" | "live" | "error">("idle");
   const [standby, setStandby] = useState(false);
@@ -360,12 +363,23 @@ export function CameraStation({ roomCode }: Props) {
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
-    return startMotionAnalyzer(videoRef.current, ({ score, active, intervalMs }) => {
+    return startMotionAnalyzer(videoRef.current, ({ score, active, cameraShift }) => {
       setMotionScore(score);
       sceneMotionScoreRef.current = score;
       dogDetectorRef.current?.setMotionActive(active);
+      if (cameraShift) {
+        const now = Date.now();
+        cameraShiftUntilRef.current = now + 3_000;
+        cameraRecoveryRef.current = { pending: true, stableDogReadings: 0 };
+        dogVisibilityRef.current = { candidate: null, count: 0, published: null };
+        behaviorTrackerRef.current.reset();
+        if (now - lastCameraRepositionEventRef.current >= 5_000) {
+          lastCameraRepositionEventRef.current = now;
+          void publishEvent("camera_repositioned", score, 0.92);
+        }
+      }
     });
-  }, [status]);
+  }, [publishEvent, status]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;
@@ -376,6 +390,18 @@ export function CameraStation({ roomCode }: Props) {
       (reading) => {
         setDogReading(reading);
         void publishDogTrack(reading);
+        const recovery = cameraRecoveryRef.current;
+        if (Date.now() < cameraShiftUntilRef.current) {
+          recovery.stableDogReadings = 0;
+          return;
+        }
+        if (recovery.pending) {
+          recovery.stableDogReadings = reading.visible && reading.box ? recovery.stableDogReadings + 1 : 0;
+          if (recovery.stableDogReadings < 2) return;
+          recovery.pending = false;
+          behaviorTrackerRef.current.reset();
+          dogVisibilityRef.current = { candidate: null, count: 0, published: null };
+        }
         const visibility = dogVisibilityRef.current;
         if (reading.visible && visibility.published !== true) dogDetectorRef.current?.setMotionActive(true);
         if (visibility.candidate === reading.visible) visibility.count += 1;
@@ -417,6 +443,10 @@ export function CameraStation({ roomCode }: Props) {
     void startAudioEnergyAnalyzer(mediaTrack, ({ level, active, intervalMs }) => {
       if (cancelled) return;
       setAudioLevel(level);
+      if (Date.now() < cameraShiftUntilRef.current || cameraRecoveryRef.current.pending) {
+        sustainedAudioRef.current = { activeMs: 0, settledMs: 0 };
+        return;
+      }
       if (active) { sustainedAudioRef.current.activeMs += intervalMs; sustainedAudioRef.current.settledMs = 0; }
       else { sustainedAudioRef.current.settledMs += intervalMs; sustainedAudioRef.current.activeMs = 0; }
       if (sustainedAudioRef.current.activeMs >= 2_000 && lastAudioStateRef.current !== "active") { lastAudioStateRef.current = "active"; void publishEvent("sound_active", undefined, 0.66); void captureEventClip("sound"); }

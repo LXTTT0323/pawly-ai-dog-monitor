@@ -17,7 +17,9 @@ export function summarizeWithRules(
   targetMinutes?: number,
   sessionKind: SessionKind = "away_monitoring",
 ): SessionSummary {
-  const observedMinutes = Math.max(1, Math.round((endedAt - startedAt) / 60000));
+  const observedMs = Math.max(1_000, endedAt - startedAt);
+  const observedSeconds = Math.max(1, Math.round(observedMs / 1_000));
+  const observedMinutes = Math.max(0.02, Math.round((observedMs / 60_000) * 100) / 100);
   const orderedEvents = [...events]
     .filter((event) => {
       const timestamp = Date.parse(event.occurredAt);
@@ -39,6 +41,7 @@ export function summarizeWithRules(
   let calmMs = 0;
   let longestCalmMs = 0;
   let firstActivityMinute: number | null = null;
+  let firstActivitySecond: number | null = null;
 
   for (const event of orderedEvents) {
     const timestamp = Date.parse(event.occurredAt);
@@ -48,7 +51,8 @@ export function summarizeWithRules(
       longestCalmMs = Math.max(longestCalmMs, span);
       state = "active";
       stateStartedAt = timestamp;
-      firstActivityMinute ??= Math.max(0, Math.round((timestamp - startedAt) / 60000));
+      firstActivitySecond ??= Math.max(0, Math.round((timestamp - startedAt) / 1_000));
+      firstActivityMinute ??= Math.max(0, Math.round(((timestamp - startedAt) / 60_000) * 10) / 10);
     }
     if (settledTypes.has(event.type) && state === "active") {
       state = "calm";
@@ -63,10 +67,10 @@ export function summarizeWithRules(
 
   const calmMinutes = activeEvents === 0
     ? observedMinutes
-    : Math.min(observedMinutes, Math.round(calmMs / 60000));
+    : Math.min(observedMinutes, Math.round((calmMs / 60_000) * 100) / 100);
   const longestCalmMinutes = activeEvents === 0
     ? observedMinutes
-    : Math.min(observedMinutes, Math.round(longestCalmMs / 60000));
+    : Math.min(observedMinutes, Math.round((longestCalmMs / 60_000) * 100) / 100);
   const calmRatio = calmMinutes / observedMinutes;
   const target = targetMinutes ?? observedMinutes;
 
@@ -104,10 +108,12 @@ export function summarizeWithRules(
       ...(outOfViewEvents > 0 ? [`Dog moved out of view ${outOfViewEvents} time${outOfViewEvents === 1 ? "" : "s"}`] : []),
     ].slice(0, 3),
     observedMinutes,
+    observedSeconds,
     calmMinutes,
     activeEvents,
     longestCalmMinutes,
     firstActivityMinute,
+    firstActivitySecond,
     nextStep,
     source: "rules",
   };

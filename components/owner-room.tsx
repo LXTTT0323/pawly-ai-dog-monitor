@@ -25,6 +25,13 @@ function durationLabel(minutes: number) {
   return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
 }
 
+function compactDuration(seconds: number) {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes} min`;
+}
+
 function coverBoxStyle(box: DogBox, video: HTMLVideoElement | null) {
   if (!video?.videoWidth || !video.videoHeight || !video.clientWidth || !video.clientHeight) {
     return { left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` };
@@ -65,6 +72,7 @@ function eventSymbol(type: PawlyEvent["type"]) {
   if (type === "sound_active") return "♪";
   if (type === "dog_visible") return "●";
   if (type === "dog_not_visible") return "?";
+  if (type === "camera_repositioned") return "↻";
   if (type.includes("camera")) return "!";
   return "✓";
 }
@@ -450,6 +458,25 @@ export function OwnerRoom({ roomCode }: Props) {
         <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>AI behavior summary</strong><p>Uses timestamped event text only. Video clips and the live feed are never sent to the model.</p></div></div><button className="button button-ghost full" onClick={() => void finishSession(true)} disabled={summaryLoading}>{summaryLoading ? "Summarizing…" : "Summarize behavior"}</button></div>
       </aside>
     </div>
-    {summary && <div className="modal-backdrop" onClick={() => setSummary(null)}><section className="summary-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSummary(null)}>×</button><span className="eyebrow">Observation review · {summary.source === "openai" ? "AI assisted" : "on-device rules"}</span><h2>{summary.headline}</h2><p className="behavior-summary">{summary.behaviorSummary}</p>{summary.notablePatterns.length > 0 && <ul className="pattern-list">{summary.notablePatterns.map((pattern) => <li key={pattern}>{pattern}</li>)}</ul>}<div className="summary-stats"><div><strong>{summary.observedMinutes}</strong><span>minutes observed</span></div><div><strong>{summary.firstActivityMinute ?? "—"}</strong><span>first activity minute</span></div><div><strong>{summary.activeEvents}</strong><span>active changes</span></div><div><strong>{summary.longestCalmMinutes}</strong><span>longest calm</span></div></div><div className="next-step"><small>What to do with this result</small><p>{summary.nextStep}</p></div>{summary.estimatedAiCostUsd != null && <p className="cost-note">Estimated model cost for this summary: ${summary.estimatedAiCostUsd.toFixed(5)}</p>}<button className="button button-primary full" onClick={() => { setEvents([]); setStartedAt(Date.now()); setSummary(null); }}>Start a fresh observation</button></section></div>}
+    {summary && (
+      <div className="modal-backdrop" onClick={() => setSummary(null)}>
+        <section className="summary-modal" onClick={(event) => event.stopPropagation()}>
+          <button className="modal-close" onClick={() => setSummary(null)}>×</button>
+          <span className="eyebrow">Observation review · {summary.source === "openai" ? "AI assisted" : "on-device rules"}</span>
+          <h2>{summary.headline}</h2>
+          <p className="behavior-summary">{summary.behaviorSummary}</p>
+          {summary.notablePatterns.length > 0 && <ul className="pattern-list">{summary.notablePatterns.map((pattern) => <li key={pattern}>{pattern}</li>)}</ul>}
+          <div className="summary-stats">
+            <div><strong>{compactDuration(summary.observedSeconds ?? summary.observedMinutes * 60)}</strong><span>observed</span></div>
+            <div><strong>{summary.firstActivitySecond == null ? "—" : compactDuration(summary.firstActivitySecond)}</strong><span>first activity</span></div>
+            <div><strong>{summary.activeEvents}</strong><span>active changes</span></div>
+            <div><strong>{compactDuration(summary.longestCalmMinutes * 60)}</strong><span>longest calm</span></div>
+          </div>
+          <div className="next-step"><small>What to do with this result</small><p>{summary.nextStep}</p></div>
+          {summary.estimatedAiCostUsd != null && <p className="cost-note">Estimated model cost for this summary: ${summary.estimatedAiCostUsd.toFixed(5)}</p>}
+          <button className="button button-primary full" onClick={() => { setEvents([]); setStartedAt(Date.now()); setSummary(null); }}>Start a fresh observation</button>
+        </section>
+      </div>
+    )}
   </main>;
 }

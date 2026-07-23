@@ -9,6 +9,7 @@ export type EventType =
   | "repeated_movement"
   | "camera_paused"
   | "camera_resumed"
+  | "camera_repositioned"
   | "camera_stopped";
 
 export type BehaviorState = "calm" | "active" | "out_of_view" | "unavailable" | "connecting";
@@ -29,10 +30,12 @@ export interface SessionSummary {
   behaviorSummary: string;
   notablePatterns: string[];
   observedMinutes: number;
+  observedSeconds?: number;
   calmMinutes: number;
   activeEvents: number;
   longestCalmMinutes: number;
   firstActivityMinute: number | null;
+  firstActivitySecond?: number | null;
   nextStep: string;
   source: "rules" | "openai";
   estimatedAiCostUsd?: number;
@@ -61,6 +64,7 @@ export function eventMessage(type: EventType): string {
     repeated_movement: "Repeated dog movement noticed",
     camera_paused: "Camera page is not visible",
     camera_resumed: "Camera monitoring resumed",
+    camera_repositioned: "Camera repositioned",
     camera_stopped: "Camera stopped monitoring",
   };
   return messages[type];
