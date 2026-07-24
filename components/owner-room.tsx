@@ -2,12 +2,13 @@
 
 import { Room, RoomEvent, Track } from "livekit-client";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Brand } from "./brand";
 import { clipFileName, deleteClip, listSavedClips, parseClipFileName, saveClip, type SavedClip } from "@/lib/clip-store";
 import type { PawlyEvent, SessionKind, SessionSummary } from "@/lib/domain";
 import type { DogBox } from "@/lib/dog-detector";
 import { deriveState, summarizeWithRules } from "@/lib/session-engine";
+import { dragSelectionToVideoBox, type DragSelection } from "@/lib/video-coordinates";
 
 interface Props { roomCode: string; }
 type ZoomMode = "checking" | "camera" | "view";
@@ -120,7 +121,9 @@ export function OwnerRoom({ roomCode }: Props) {
   const [zoomBounds, setZoomBounds] = useState({ min: 1, max: 3 });
   const [talking, setTalking] = useState(false);
   const [talkStatus, setTalkStatus] = useState<"ready" | "requesting" | "blocked">("ready");
-  const [dogTrack, setDogTrack] = useState<{ visible: boolean; confidence: number; box: DogBox | null } | null>(null);
+  const [dogTrack, setDogTrack] = useState<{ visible: boolean; confidence: number; box: DogBox | null; targetMode: "auto" | "owner_guided" } | null>(null);
+  const [dogSelectionMode, setDogSelectionMode] = useState(false);
+  const [dogSelection, setDogSelection] = useState<DragSelection | null>(null);
   const reviewSinceRef = useRef(Date.now() - 4 * 60 * 60 * 1000);
   const autoSummaryRequestedRef = useRef(false);
   const sessionSettingsRef = useRef({ sessionKind, targetMinutes });
@@ -218,11 +221,12 @@ export function OwnerRoom({ roomCode }: Props) {
         }
         if (topic === "pawly-dog-track") {
           try {
-            const reading = JSON.parse(new TextDecoder().decode(payload)) as { visible?: boolean; confidence?: number; box?: DogBox | null };
+            const reading = JSON.parse(new TextDecoder().decode(payload)) as { visible?: boolean; confidence?: number; box?: DogBox | null; targetMode?: "auto" | "owner_guided" };
             setDogTrack({
               visible: reading.visible === true,
               confidence: Number.isFinite(reading.confidence) ? reading.confidence ?? 0 : 0,
               box: reading.box ?? null,
+              targetMode: reading.targetMode === "owner_guided" ? "owner_guided" : "auto",
             });
           } catch { /* ignore malformed tracking data */ }
           return;
@@ -398,6 +402,59 @@ export function OwnerRoom({ roomCode }: Props) {
     );
   };
 
+  const sendDogTarget = async (box: DogBox | null) => {
+    const room = roomRef.current;
+    if (!room || !connected) return;
+    await room.localParticipant.publishData(
+      new TextEncoder().encode(JSON.stringify({ type: "set_dog_target", box })),
+      { reliable: true, topic: "pawly-command" },
+    );
+    setDogTrack((current) => current ? { ...current, targetMode: box ? "owner_guided" : "auto" } : current);
+  };
+
+  const localPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.min(bounds.width, Math.max(0, event.clientX - bounds.left)),
+      y: Math.min(bounds.height, Math.max(0, event.clientY - bounds.top)),
+    };
+  };
+
+  const beginDogSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dogSelectionMode) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = localPointer(event);
+    setDogSelection({ startX: point.x, startY: point.y, endX: point.x, endY: point.y });
+  };
+
+  const moveDogSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dogSelectionMode || !dogSelection || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    const point = localPointer(event);
+    setDogSelection((current) => current ? { ...current, endX: point.x, endY: point.y } : current);
+  };
+
+  const finishDogSelection = async (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dogSelectionMode || !dogSelection) return;
+    const point = localPointer(event);
+    const finalSelection = { ...dogSelection, endX: point.x, endY: point.y };
+    const video = videoRef.current;
+    const target = video ? dragSelectionToVideoBox(finalSelection, {
+      width: video.clientWidth,
+      height: video.clientHeight,
+      videoWidth: video.videoWidth,
+      videoHeight: video.videoHeight,
+      zoom: zoomMode === "camera" ? 1 : zoom,
+    }) : null;
+    setDogSelection(null);
+    if (!target) {
+      setError("Draw a slightly larger box around your dog and try again.");
+      return;
+    }
+    setError("");
+    setDogSelectionMode(false);
+    await sendDogTarget(target);
+  };
+
   const removeClip = async (id: string) => {
     await deleteClip(id);
     await refreshClips();
@@ -415,12 +472,34 @@ export function OwnerRoom({ roomCode }: Props) {
           <audio ref={audioRef} playsInline />
           {connected && dogTrack?.visible && dogTrack.box && (
             <div className="dog-track-layer" style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }}>
-              <div className="dog-detection-box" style={coverBoxStyle(dogTrack.box, videoRef.current)}>
-                <span>Dog · {Math.round(dogTrack.confidence * 100)}%</span>
+              <div className={`dog-detection-box ${dogTrack.targetMode === "owner_guided" ? "owner-guided" : ""}`} style={coverBoxStyle(dogTrack.box, videoRef.current)}>
+                <span>{dogTrack.targetMode === "owner_guided" ? "Your dog" : "Dog"} · {Math.round(dogTrack.confidence * 100)}%</span>
               </div>
             </div>
           )}
+          {connected && <div
+            className={`dog-target-selection-layer ${dogSelectionMode ? "selecting" : ""}`}
+            onPointerDown={beginDogSelection}
+            onPointerMove={moveDogSelection}
+            onPointerUp={(event) => void finishDogSelection(event)}
+            onPointerCancel={() => setDogSelection(null)}
+            aria-hidden={!dogSelectionMode}
+          >
+            {dogSelectionMode && <div className="dog-selection-instruction">Drag a box around your dog</div>}
+            {dogSelection && <div className="dog-selection-draft" style={{
+              left: Math.min(dogSelection.startX, dogSelection.endX),
+              top: Math.min(dogSelection.startY, dogSelection.endY),
+              width: Math.abs(dogSelection.endX - dogSelection.startX),
+              height: Math.abs(dogSelection.endY - dogSelection.startY),
+            }} />}
+          </div>}
           {!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}
+          {connected && <div className="dog-target-controls">
+            <button className={dogSelectionMode ? "active" : ""} onClick={() => { setDogSelection(null); setDogSelectionMode((current) => !current); }}>
+              {dogSelectionMode ? "Cancel selection" : dogTrack?.targetMode === "owner_guided" ? "Re-select your dog" : "Help AI find your dog"}
+            </button>
+            {dogTrack?.targetMode === "owner_guided" && <button className="target-reset" onClick={() => { setDogSelectionMode(false); setDogSelection(null); void sendDogTarget(null); }}>Use auto detection</button>}
+          </div>}
           {connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}
           {connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} aria-pressed={listening} onClick={() => void toggleListening()}>{listening ? "♪ Room sound · On" : "♪ Room sound · Off"}</button> : cameraAudioStatus === "off" ? <button className={`room-audio-status room-audio-action ${roomSoundRequest === "sent" ? "sent" : ""}`} onClick={() => void requestRoomSound()} disabled={roomSoundRequest === "requesting"}>{roomSoundRequest === "requesting" ? "Requesting room sound…" : roomSoundRequest === "sent" ? "Check the iPad to allow sound" : "Turn on room sound"}</button> : <span className="room-audio-status">Waiting for room sound…</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}
           <div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div>

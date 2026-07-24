@@ -13,12 +13,14 @@ export interface DogReading {
   visible: boolean;
   confidence: number;
   box: DogBox | null;
+  targetMode: "auto" | "owner_guided";
   inferenceMs: number;
   observedAt: number;
 }
 
 export interface DogDetectorController {
   setMotionActive(active: boolean): void;
+  setTargetBox(box: DogBox | null): void;
   retry(): void;
   stop(): void;
 }
@@ -66,6 +68,25 @@ function smoothBox(previous: DogBox | null, next: DogBox): DogBox {
   };
 }
 
+function expandedSearchBox(box: DogBox): DogBox {
+  const minimumWidth = 0.22;
+  const minimumHeight = 0.22;
+  const width = Math.min(1, Math.max(minimumWidth, box.width * 2.4));
+  const height = Math.min(1, Math.max(minimumHeight, box.height * 2.4));
+  const centerX = box.x + box.width / 2;
+  const centerY = box.y + box.height / 2;
+  const x = clamp(centerX - width / 2, 0, 1 - width);
+  const y = clamp(centerY - height / 2, 0, 1 - height);
+  return { x, y, width, height };
+}
+
+function boxCenterDistance(left: DogBox, right: DogBox) {
+  return Math.hypot(
+    left.x + left.width / 2 - (right.x + right.width / 2),
+    left.y + left.height / 2 - (right.y + right.height / 2),
+  );
+}
+
 export function startDogDetector(
   video: HTMLVideoElement,
   onReading: (reading: DogReading) => void,
@@ -75,6 +96,10 @@ export function startDogDetector(
   canvas.width = 384;
   canvas.height = 216;
   const context = canvas.getContext("2d", { alpha: false });
+  const targetCanvas = document.createElement("canvas");
+  targetCanvas.width = 320;
+  targetCanvas.height = 320;
+  const targetContext = targetCanvas.getContext("2d", { alpha: false });
   let detector: MediaPipeObjectDetector | null = null;
   let timer: number | null = null;
   let retryTimer: number | null = null;
@@ -87,6 +112,7 @@ export function startDogDetector(
   let lastBox: DogBox | null = null;
   let lastConfidence = 0;
   let consecutiveMisses = 0;
+  let ownerGuided = false;
 
   const schedule = (delay?: number) => {
     if (stopped) return;
@@ -98,32 +124,67 @@ export function startDogDetector(
 
   const capture = () => {
     if (stopped) return;
-    if (!ready || inFlight || !context || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    if (!ready || inFlight || !context || !targetContext || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       schedule(1_000);
       return;
     }
     try {
       inFlight = true;
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
       const startedAt = performance.now();
-      const result = detector?.detect(canvas);
-      const candidate = result?.detections
+      const targetAnchor = ownerGuided && consecutiveMisses < 3 ? lastBox : null;
+      const searchBox = targetAnchor ? expandedSearchBox(targetAnchor) : null;
+      const inferenceCanvas = searchBox ? targetCanvas : canvas;
+      if (searchBox) {
+        targetContext.drawImage(
+          video,
+          searchBox.x * video.videoWidth,
+          searchBox.y * video.videoHeight,
+          searchBox.width * video.videoWidth,
+          searchBox.height * video.videoHeight,
+          0,
+          0,
+          targetCanvas.width,
+          targetCanvas.height,
+        );
+      } else {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      }
+      const result = detector?.detect(inferenceCanvas);
+      const candidates = result?.detections
         .filter((detection) => detection.categories.some((category) => category.categoryName.toLowerCase() === "dog"))
-        .sort((left, right) => (right.categories[0]?.score ?? 0) - (left.categories[0]?.score ?? 0))[0];
-      const category = candidate?.categories
-        .filter((item) => item.categoryName.toLowerCase() === "dog")
-        .sort((left, right) => right.score - left.score)[0];
-      const box = candidate?.boundingBox;
+        .map((detection) => {
+          const detectedBox = detection.boundingBox;
+          if (!detectedBox) return null;
+          const localBox = {
+            x: detectedBox.originX / inferenceCanvas.width,
+            y: detectedBox.originY / inferenceCanvas.height,
+            width: detectedBox.width / inferenceCanvas.width,
+            height: detectedBox.height / inferenceCanvas.height,
+          };
+          const mappedBox = searchBox ? {
+            x: searchBox.x + localBox.x * searchBox.width,
+            y: searchBox.y + localBox.y * searchBox.height,
+            width: localBox.width * searchBox.width,
+            height: localBox.height * searchBox.height,
+          } : localBox;
+          const category = detection.categories
+            .filter((item) => item.categoryName.toLowerCase() === "dog")
+            .sort((left, right) => right.score - left.score)[0];
+          return { detection, box: mappedBox, confidence: category?.score ?? 0 };
+        })
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+        .sort((left, right) => {
+          if (!ownerGuided || !lastBox) return right.confidence - left.confidence;
+          const leftScore = left.confidence - boxCenterDistance(left.box, lastBox) * 0.9;
+          const rightScore = right.confidence - boxCenterDistance(right.box, lastBox) * 0.9;
+          return rightScore - leftScore;
+        });
+      const candidate = candidates?.[0];
       let readingBox: DogBox | null = null;
       let visible = false;
-      let confidence = category?.score ?? 0;
-      if (candidate && box) {
-        const nextBox = paddedBox({
-          x: box.originX / canvas.width,
-          y: box.originY / canvas.height,
-          width: box.width / canvas.width,
-          height: box.height / canvas.height,
-        });
+      let confidence = candidate?.confidence ?? 0;
+      if (candidate) {
+        const nextBox = paddedBox(candidate.box);
         lastBox = smoothBox(lastBox, nextBox);
         lastConfidence = confidence;
         consecutiveMisses = 0;
@@ -144,6 +205,7 @@ export function startDogDetector(
         visible,
         confidence,
         box: readingBox,
+        targetMode: ownerGuided ? "owner_guided" : "auto",
         inferenceMs: performance.now() - startedAt,
         observedAt: Date.now(),
       });
@@ -199,6 +261,16 @@ export function startDogDetector(
         activeUntil = Date.now() + 15_000;
         if (!inFlight) schedule(100);
       }
+    },
+    setTargetBox(box) {
+      ownerGuided = box !== null;
+      if (box) {
+        lastBox = paddedBox(box);
+        lastConfidence = 0.5;
+        consecutiveMisses = 0;
+        trackingUntil = Date.now() + 10_000;
+      }
+      if (!inFlight) schedule(50);
     },
     retry() {
       if (retryTimer != null) window.clearTimeout(retryTimer);
