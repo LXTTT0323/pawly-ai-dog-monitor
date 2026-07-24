@@ -8,7 +8,7 @@ Pawly turns a spare phone, tablet, or laptop into a private, dog-aware room moni
 
 ## What Pawly does
 
-- Creates a private 12-character room and separate camera/viewer experiences.
+- Creates a cryptographically random 12-character room per browser profile, with separate camera/viewer experiences and an explicit room-key rotation control.
 - Streams live video and optional room audio between modern browsers using LiveKit and WebRTC.
 - Detects dog presence locally with MediaPipe EfficientDet-Lite0.
 - Uses adaptive sampling so dog detection runs faster after meaningful movement and slower while the room is settled.
@@ -30,7 +30,7 @@ Codex was the development partner for the complete working product rather than a
 1. Turn the initial idea into a scoped two-device beta and technical architecture.
 2. Build the React and TypeScript application, responsive landing page, setup flow, camera station, and owner dashboard.
 3. Integrate LiveKit permissions, room tokens, WebRTC video/audio, data messages, file transfer, and full-duplex talkback.
-4. Implement local motion analysis, MediaPipe dog detection in a Web Worker, adaptive inference intervals, sustained-sound gating, and event recording.
+4. Implement local motion analysis, MediaPipe dog detection, adaptive inference intervals, sustained-sound gating, and event recording.
 5. Add IndexedDB clip storage, remote display wake, camera/view zoom, long-outing controls, and conservative session summaries.
 6. Diagnose real iPad and browser permission behavior, test token scopes, run TypeScript/build validation, and iteratively improve the experience from live feedback.
 7. Design the AI cost boundary so continuous media stays outside the model and only a compact event timeline is summarized on demand.
@@ -68,7 +68,7 @@ flowchart LR
 
 ## Real-use flow
 
-1. Open `/setup` and copy the camera link to a spare device.
+1. Open `/setup`; this browser creates and remembers a random private room key. Copy the camera link to a spare device.
 2. Allow camera and, optionally, microphone access.
 3. Open the private viewer link on another phone or computer.
 4. Choose **Quick check** or **Going out** and the planned observation window.
@@ -82,7 +82,7 @@ flowchart LR
 - React 19, TypeScript, Vinext, Vite
 - LiveKit and WebRTC
 - MediaPipe Tasks Vision / EfficientDet-Lite0
-- Web Workers, Web Audio API, MediaRecorder API
+- Web Audio API, MediaRecorder API
 - IndexedDB
 - Vercel
 

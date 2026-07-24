@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
-  title: { default: "Pawly Coach", template: "%s · Pawly Coach" },
+  title: { default: "Pawly — AI Dog Monitor", template: "%s · Pawly" },
   description: "Turn any spare device into a private AI pet camera that understands the moments that matter.",
   openGraph: {
     title: "Pawly — See what happens after you leave.",

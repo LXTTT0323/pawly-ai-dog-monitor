@@ -34,3 +34,23 @@
 .event-symbol.camera_repositioned{background:#e5e8ea;color:#52626a}
 .summary-stats{grid-template-columns:repeat(4,1fr)}
 @media(max-width:800px){.summary-stats{grid-template-columns:repeat(2,1fr)}}
+
+/* Release setup: one persistent key per browser profile, with explicit rotation. */
+.room-key-note{margin-top:28px;padding:18px;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.44);display:flex;flex-direction:column;gap:7px}.room-key-note strong{font-size:12px}.room-key-note span{font-size:11px;line-height:1.6;color:#6b8178}.room-key-row{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:22px 0}.room-key-row>div{min-width:0;display:flex;flex-direction:column;gap:6px}.room-key-row small{font-size:9px;text-transform:uppercase;letter-spacing:.13em;font-weight:850;color:#758b82}.room-key-row .room-code{margin:0;padding:0;background:transparent;word-break:break-all}.rotate-key-button{flex:0 0 auto;border:1px solid var(--line);border-radius:999px;background:var(--cream);color:var(--ink);min-height:38px;padding:0 15px;font-size:10px;font-weight:850}.rotate-confirm{margin:-5px 0 20px;padding:16px;border-radius:15px;background:#fff4dc;border:1px solid rgba(164,117,32,.18)}.rotate-confirm>strong{font-size:12px}.rotate-confirm>p{margin:6px 0 13px!important;color:#715f38!important}.rotate-confirm>div{display:flex;gap:8px}.rotate-confirm button{min-height:35px;padding:0 13px;border:0;border-radius:999px;background:rgba(23,63,53,.08);color:var(--ink);font-size:10px;font-weight:800}.rotate-confirm .confirm-new-key{background:var(--ink);color:#fff}.key-changed-message{margin:-3px 0 17px!important;padding:10px 12px;border-radius:12px;background:var(--mint);color:#3f6c59!important;font-weight:750}.setup-panel .button{font-size:12px}.join-field input{min-width:0}
+
+@media(max-width:600px){
+  .room-key-row{align-items:flex-end}.room-key-row .room-code{font-size:20px;letter-spacing:.1em}.rotate-key-button{padding-inline:12px}
+  .setup-panel .button-row .button,.setup-panel .button-row a{width:100%}
+  .setup-panel{border-radius:22px}.setup-step>span{margin-bottom:-4px}
+}
+
+/* Final responsive safeguards across landing, camera, and owner views. */
+html,body{max-width:100%;overflow-x:hidden}.hero-copy,.setup-intro,.setup-panel,.live-panel,.timeline-panel{min-width:0}
+@media(max-width:600px){
+  .hero h1{font-size:clamp(45px,13vw,54px)}.hero-visual{width:100%;min-height:410px}.device-card{width:96%}.orb-one{width:110vw;height:110vw}.orb-two{width:52vw;height:52vw}.floating-note{max-width:86%}
+  .privacy-list p{grid-template-columns:36px 1fr}.footer{height:auto;min-height:150px;text-align:center;padding-block:28px}
+  .dashboard-page{padding:0 8px 18px}.dashboard-nav{height:68px;padding-inline:6px}.dashboard-nav .brand{font-size:18px}.dashboard-nav-actions{gap:6px}.dashboard-nav-actions .button{min-height:38px;padding-inline:13px;font-size:10px}
+  .live-panel{padding:10px;border-radius:18px}.owner-video{height:58svh;min-height:390px;border-radius:14px}.current-state{left:12px;bottom:12px;min-width:0;max-width:52%;padding:10px 12px}.current-state strong{font-size:19px}.zoom-control{right:10px;top:10px}.voice-control-stack{right:10px;bottom:70px;max-width:64%}.voice-control-stack button,.voice-control-stack .room-audio-status{max-width:100%;white-space:normal;text-align:center}
+  .session-bar>div:first-child{order:1;width:100%}.session-kind-control{order:2;width:100%;justify-content:center}.session-kind-control button{flex:1}.target-control{order:3;width:100%}.target-input-row,.target-control select{width:100%}.wake-ipad-button{order:4!important}.finish-review-button{order:5;width:100%}
+  .camera-page{padding:8px}.camera-header{height:54px}.camera-frame{height:calc(100svh - 230px);min-height:390px;border-radius:18px}.camera-controls{min-height:0}.camera-control-actions .button{min-width:140px}.camera-privacy{line-height:1.5;padding-inline:8px}
+}
