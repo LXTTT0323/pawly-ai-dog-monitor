@@ -322,6 +322,7 @@ export function CameraStation({ roomCode }: Props) {
             setDogTargetMode(validBox ? "owner_guided" : "auto");
             dogDetectorRef.current?.setTargetBox(ownerDogTargetRef.current);
           }
+          if (command.type === "stop_monitoring") void stop();
         } catch { /* Ignore malformed remote commands. */ }
       });
       room.on(RoomEvent.TrackSubscribed, (track) => {
@@ -372,7 +373,7 @@ export function CameraStation({ roomCode }: Props) {
       setAudioStatus("off");
       setError(cameraErrorMessage(cause)); setStatus("error");
     }
-  }, [applyCameraZoom, enableAudio, publishAudioStatus, publishEvent, requestWakeLock, roomCode, sendEventHistory, sendSavedClips, wakeDisplay]);
+  }, [applyCameraZoom, enableAudio, publishAudioStatus, publishEvent, requestWakeLock, roomCode, sendEventHistory, sendSavedClips, stop, wakeDisplay]);
 
   useEffect(() => {
     if (status !== "live" || !videoRef.current) return;

@@ -69,6 +69,11 @@ export default function SetupPage() {
             <div>
               <h2>Open camera mode</h2>
               <p>Use a modern browser and allow the camera. Microphone access is optional and can be changed anytime.</p>
+              <div className="camera-device-checklist">
+                <span><b>1</b> Keep the camera device plugged in.</span>
+                <span><b>2</b> Leave the browser page open and do not lock the screen.</span>
+                <span><b>3</b> Use Pawly’s dark standby instead of turning the screen off.</span>
+              </div>
               <div className="room-key-row">
                 <div>
                   <small>Private room key</small>
@@ -115,31 +120,32 @@ export default function SetupPage() {
                 </button>
               </div>
 
-              <label className="join-field">
-                <span>Join another room</span>
-                <div>
-                  <input
-                    value={joinCode}
-                    onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, "").slice(0, 12))}
-                    placeholder="12-character key"
-                    inputMode="text"
-                    autoCapitalize="characters"
-                    spellCheck={false}
-                  />
-                  <a
-                    aria-disabled={!isRoomCode(joinCode)}
-                    className={`button button-dark ${!isRoomCode(joinCode) ? "disabled" : ""}`}
-                    href={isRoomCode(joinCode) ? `/watch?room=${joinCode}` : undefined}
-                  >
-                    Join
-                  </a>
-                </div>
-              </label>
+              <details className="join-disclosure">
+                <summary>Have a room code?</summary>
+                <label className="join-field">
+                  <span>Join another room</span>
+                  <div>
+                    <input
+                      value={joinCode}
+                      onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, "").slice(0, 12))}
+                      placeholder="12-character key"
+                      inputMode="text"
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                    />
+                    <a
+                      aria-disabled={!isRoomCode(joinCode)}
+                      className={`button button-dark ${!isRoomCode(joinCode) ? "disabled" : ""}`}
+                      href={isRoomCode(joinCode) ? `/watch?room=${joinCode}` : undefined}
+                    >
+                      Join
+                    </a>
+                  </div>
+                </label>
+              </details>
             </div>
           </div>
         </div>
-
-        <p className="beta-warning"><strong>Camera-device note:</strong> keep it plugged in and do not lock the screen. Pawly can switch to a nearly black standby page while monitoring stays active; tap it—or use “Wake camera display” from the dashboard—to show the preview again.</p>
       </section>
     </main>
   );

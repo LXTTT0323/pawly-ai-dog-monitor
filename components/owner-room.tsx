@@ -124,6 +124,13 @@ export function OwnerRoom({ roomCode }: Props) {
   const [dogTrack, setDogTrack] = useState<{ visible: boolean; confidence: number; box: DogBox | null; targetMode: "auto" | "owner_guided" } | null>(null);
   const [dogSelectionMode, setDogSelectionMode] = useState(false);
   const [dogSelection, setDogSelection] = useState<DragSelection | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [roomCodeVisible, setRoomCodeVisible] = useState(false);
+  const [roomLinkCopied, setRoomLinkCopied] = useState<"camera" | "owner" | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">("default");
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [endingMonitoring, setEndingMonitoring] = useState(false);
+  const [trackingAssistReady, setTrackingAssistReady] = useState(false);
   const reviewSinceRef = useRef(Date.now() - 4 * 60 * 60 * 1000);
   const autoSummaryRequestedRef = useRef(false);
   const sessionSettingsRef = useRef({ sessionKind, targetMinutes });
@@ -296,6 +303,25 @@ export function OwnerRoom({ roomCode }: Props) {
     const timer = window.setTimeout(() => setZoomMode((current) => current === "checking" ? "view" : current), 2_500);
     return () => window.clearTimeout(timer);
   }, [connected, zoomMode]);
+  useEffect(() => {
+    setNotificationPermission("Notification" in window ? Notification.permission : "unsupported");
+  }, []);
+  useEffect(() => {
+    if (!connected) {
+      setTrackingAssistReady(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setTrackingAssistReady(true), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [connected]);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [settingsOpen]);
   useEffect(() => { const timer = window.setInterval(() => setElapsed(Date.now() - startedAt), 1000); return () => window.clearInterval(timer); }, [startedAt]);
 
   const sessionTime = useMemo(() => `${String(Math.floor(elapsed / 60000)).padStart(2, "0")}:${String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0")}`, [elapsed]);
@@ -310,7 +336,20 @@ export function OwnerRoom({ roomCode }: Props) {
     } catch { setSummary(rulesSummary); } finally { setSummaryLoading(false); }
   };
 
-  const requestNotifications = async () => { if ("Notification" in window) await Notification.requestPermission(); };
+  const requestNotifications = async () => {
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+    setNotificationPermission(await Notification.requestPermission());
+  };
+
+  const copyRoomLink = async (target: "camera" | "owner") => {
+    const url = `${window.location.origin}/${target === "camera" ? "camera" : "watch"}?room=${roomCode}`;
+    await navigator.clipboard.writeText(url);
+    setRoomLinkCopied(target);
+    window.setTimeout(() => setRoomLinkCopied(null), 1_800);
+  };
 
   const toggleListening = async () => {
     const room = roomRef.current;
@@ -366,6 +405,27 @@ export function OwnerRoom({ roomCode }: Props) {
     );
     setWakeSent(true);
     window.setTimeout(() => setWakeSent(false), 2500);
+  };
+
+  const endMonitoring = async () => {
+    const room = roomRef.current;
+    if (!room || endingMonitoring) return;
+    setEndingMonitoring(true);
+    try {
+      await room.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify({ type: "stop_monitoring" })),
+        { reliable: true, topic: "pawly-command" },
+      );
+      setSummary(await requestSessionSummary(events, startedAt, targetMinutes, sessionKind));
+      await room.disconnect();
+      setConnected(false);
+      setSettingsOpen(false);
+      setShowEndConfirm(false);
+    } catch {
+      setError("Could not stop the camera remotely. Stop monitoring on the camera device.");
+    } finally {
+      setEndingMonitoring(false);
+    }
   };
 
   const requestRoomSound = async () => {
@@ -461,12 +521,34 @@ export function OwnerRoom({ roomCode }: Props) {
   };
 
   const customAwayWindow = sessionKind === "away_monitoring" && targetMinutes > 240;
+  const maskedRoomCode = `${roomCode.slice(0, 4)}••••${roomCode.slice(-4)}`;
+  const dogTrackingNeedsHelp = trackingAssistReady && (!dogTrack?.visible || dogTrack.confidence < 0.55);
+  const showDogTargetControls = connected && (dogSelectionMode || dogTrack?.targetMode === "owner_guided" || dogTrackingNeedsHelp);
+  const dogAssistLabel = dogSelectionMode
+    ? "Cancel selection"
+    : dogTrack?.targetMode === "owner_guided"
+      ? "Re-select your dog"
+      : dogTrack?.visible
+        ? "Not sure — select your dog"
+        : "Dog not found — help AI";
+  const hasArrivalActivity = Boolean(arrivalSummary && arrivalSummary.activeEvents > 0);
 
   return <main className="dashboard-page">
-    <nav className="dashboard-nav"><Brand /><div className="dashboard-nav-actions"><button className="icon-button" onClick={requestNotifications} title="Enable notifications">♢</button><Link className="button button-small button-ghost" href="/setup">Room settings</Link></div></nav>
+    <nav className="dashboard-nav">
+      <Brand />
+      <button
+        className="room-menu-button"
+        type="button"
+        aria-label="Open room and device settings"
+        aria-expanded={settingsOpen}
+        onClick={() => setSettingsOpen(true)}
+      >
+        <span aria-hidden="true">⚙</span>
+      </button>
+    </nav>
     <div className="dashboard-grid">
       <section className="live-panel">
-        <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><code>{roomCode}</code></div>
+        <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><span className="private-room-label">Private room</span></div>
         <div className="owner-video">
           <video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} />
           <audio ref={audioRef} playsInline />
@@ -494,14 +576,14 @@ export function OwnerRoom({ roomCode }: Props) {
             }} />}
           </div>}
           {!connected && <div className="video-placeholder"><div className="camera-lens">◉</div><h2>The room is quiet for now</h2><p>Start camera mode on the other device using this room key.</p><button className="button button-light" onClick={connect}>Try again</button></div>}
-          {connected && <div className="dog-target-controls">
+          {showDogTargetControls && <div className="dog-target-controls">
             <button className={dogSelectionMode ? "active" : ""} onClick={() => { setDogSelection(null); setDogSelectionMode((current) => !current); }}>
-              {dogSelectionMode ? "Cancel selection" : dogTrack?.targetMode === "owner_guided" ? "Re-select your dog" : "Help AI find your dog"}
+              {dogAssistLabel}
             </button>
             {dogTrack?.targetMode === "owner_guided" && <button className="target-reset" onClick={() => { setDogSelectionMode(false); setDogSelection(null); void sendDogTarget(null); }}>Use auto detection</button>}
           </div>}
           {connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}
-          {connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} aria-pressed={listening} onClick={() => void toggleListening()}>{listening ? "♪ Room sound · On" : "♪ Room sound · Off"}</button> : cameraAudioStatus === "off" ? <button className={`room-audio-status room-audio-action ${roomSoundRequest === "sent" ? "sent" : ""}`} onClick={() => void requestRoomSound()} disabled={roomSoundRequest === "requesting"}>{roomSoundRequest === "requesting" ? "Requesting room sound…" : roomSoundRequest === "sent" ? "Check the iPad to allow sound" : "Turn on room sound"}</button> : <span className="room-audio-status">Waiting for room sound…</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}
+          {connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} aria-pressed={listening} onClick={() => void toggleListening()}>{listening ? "♪ Room sound · On" : "♪ Room sound · Off"}</button> : cameraAudioStatus === "off" ? <button className={`room-audio-status room-audio-action ${roomSoundRequest === "sent" ? "sent" : ""}`} onClick={() => void requestRoomSound()} disabled={roomSoundRequest === "requesting"}>{roomSoundRequest === "requesting" ? "Requesting room sound…" : roomSoundRequest === "sent" ? "Allow sound on the camera device" : "Room audio is off · Enable"}</button> : <span className="room-audio-status">Checking room audio…</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}
           <div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div>
         </div>
         {error && <p className="error-banner">{error}</p>}
@@ -512,31 +594,76 @@ export function OwnerRoom({ roomCode }: Props) {
             <button className={sessionKind === "away_monitoring" ? "selected" : ""} onClick={() => { setSessionKind("away_monitoring"); setTargetMinutes(180); }}>Going out</button>
           </div>
           <label className="target-control"><small>Planned window</small><div className="target-input-row"><select value={customAwayWindow ? "custom" : targetMinutes} onChange={(event) => event.target.value === "custom" ? setTargetMinutes(customAwayHours * 60) : setTargetMinutes(Number(event.target.value))}>{durationOptions[sessionKind].map((minutes) => <option key={minutes} value={minutes}>{durationLabel(minutes)}</option>)}{sessionKind === "away_monitoring" && <option value="custom">4+ hr</option>}</select>{customAwayWindow && <label className="custom-hours"><input aria-label="Custom outing hours" type="number" min="5" max="12" step="1" value={customAwayHours} onChange={(event) => { const hours = Math.min(12, Math.max(5, Number(event.target.value) || 5)); setCustomAwayHours(hours); setTargetMinutes(hours * 60); }} /><span>hours</span></label>}</div></label>
-          <button className="button button-ghost wake-ipad-button" onClick={() => void wakeIpadDisplay()} disabled={!connected}>{wakeSent ? "Display awake for 60s" : "Wake camera display"}</button><button className="button button-dark finish-review-button" onClick={() => void finishSession(false)}>Finish & review</button>
+          <button className="button button-dark finish-review-button" onClick={() => void finishSession(true)} disabled={summaryLoading}>{summaryLoading ? "Creating recap…" : "View recap so far"}</button>
         </div>
       </section>
 
       <aside className="timeline-panel">
-        <div className="timeline-heading"><div><span className="eyebrow">Live timeline</span><h2>What matters</h2></div><span className="event-count">{events.length}</span></div>
+        <div className="timeline-heading"><div><span className="eyebrow">Live activity</span><h2>What matters</h2></div>{events.length > 0 && <span className="event-count" aria-label={`${events.length} events`}>{events.length}</span>}</div>
         <section className="arrival-recap-card" aria-live="polite">
           <span className="eyebrow">Since your last check</span>
           {arrivalSummaryLoading ? (
             <p>Reviewing recent movement, sound events, and saved moments…</p>
-          ) : arrivalSummary ? (
+          ) : hasArrivalActivity && arrivalSummary ? (
             <>
               <strong>{arrivalSummary.headline}</strong>
               <p>{arrivalSummary.behaviorSummary}</p>
               <button onClick={() => setSummary(arrivalSummary)}>Open full recap</button>
             </>
           ) : (
-            <p>Your latest activity recap will appear when the camera connects.</p>
+            <p>{connected ? "No new activity since you opened this page." : "Connect the camera to begin monitoring."}</p>
           )}
         </section>
-        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><p>Dog visibility, sustained sound, and tracked dog movement will appear here. Moving the camera itself is ignored.</p></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Dog movement score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
+        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><div><strong>No activity detected yet</strong><p>Pawly will show dog movement, sound, and visibility changes here. Camera movement is ignored.</p></div></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Dog movement score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
         <section className="saved-clips-section"><div className="saved-clips-heading"><div><strong>Recent activity replay</strong><span>12-second detected moments · this device</span></div><b>{clips.length}</b></div>{clipReceiveProgress != null && <div className="clip-progress"><span style={{ width: `${Math.round(clipReceiveProgress * 100)}%` }} /></div>}<div className="saved-clips-list">{clips.length === 0 ? <p>Movement or sustained sound can automatically save a short replay here.</p> : clips.slice(0, 4).map((clip) => <SavedClipCard key={clip.id} clip={clip} onDelete={(id) => void removeClip(id)} />)}</div></section>
-        <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>AI behavior summary</strong><p>Uses timestamped event text only. Video clips and the live feed are never sent to the model.</p></div></div><button className="button button-ghost full" onClick={() => void finishSession(true)} disabled={summaryLoading}>{summaryLoading ? "Summarizing…" : "Summarize behavior"}</button></div>
+        <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>AI recap is included</strong><p>“View recap so far” summarizes timestamped events without stopping monitoring. Video clips and the live feed are never sent to the model.</p></div></div></div>
       </aside>
     </div>
+    {settingsOpen && (
+      <div className="room-settings-backdrop" onClick={() => setSettingsOpen(false)}>
+        <aside className="room-settings-drawer" role="dialog" aria-modal="true" aria-labelledby="room-settings-title" onClick={(event) => event.stopPropagation()}>
+          <div className="room-settings-header">
+            <div><span className="eyebrow">Pawly controls</span><h2 id="room-settings-title">Room & devices</h2></div>
+            <button type="button" aria-label="Close room settings" onClick={() => setSettingsOpen(false)}>×</button>
+          </div>
+
+          <section className="settings-card">
+            <div className="settings-card-heading"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><strong>Camera device</strong></div><span>{connected ? "Online" : "Offline"}</span></div>
+            <p>{connected ? "Your camera is connected to this private room." : "Open camera mode on your other device to reconnect."}</p>
+            <button className="settings-action" type="button" onClick={() => void wakeIpadDisplay()} disabled={!connected}>{wakeSent ? "Display awake for 60 seconds" : "Wake camera display"}</button>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-heading"><strong>Private room</strong><button className="text-action" type="button" onClick={() => setRoomCodeVisible((current) => !current)}>{roomCodeVisible ? "Hide" : "Show"}</button></div>
+            <code className="masked-room-code">{roomCodeVisible ? roomCode : maskedRoomCode}</code>
+            <div className="settings-action-row">
+              <button className="settings-action" type="button" onClick={() => void copyRoomLink("camera")}>{roomLinkCopied === "camera" ? "Camera link copied" : "Copy camera link"}</button>
+              <button className="settings-action" type="button" onClick={() => void copyRoomLink("owner")}>{roomLinkCopied === "owner" ? "Owner link copied" : "Copy owner link"}</button>
+            </div>
+            <Link className="settings-text-link" href="/setup">Manage pairing and room keys →</Link>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-heading"><strong>Activity notifications</strong><span>{notificationPermission === "granted" ? "On" : notificationPermission === "denied" ? "Blocked" : notificationPermission === "unsupported" ? "Unavailable" : "Off"}</span></div>
+            <p>Get a browser notification for meaningful movement, sound, or when your dog leaves view.</p>
+            {notificationPermission === "default" && <button className="settings-action" type="button" onClick={() => void requestNotifications()}>Enable notifications</button>}
+            {notificationPermission === "denied" && <p className="settings-permission-note">Notifications are blocked. Open this site’s browser permissions to allow them.</p>}
+          </section>
+
+          <section className="settings-danger-zone">
+            {!showEndConfirm ? (
+              <button type="button" onClick={() => setShowEndConfirm(true)} disabled={!connected}>End monitoring</button>
+            ) : (
+              <div className="end-monitoring-confirm" role="alert">
+                <strong>Stop the camera session?</strong>
+                <p>This ends monitoring on the camera device and opens your final recap.</p>
+                <div><button type="button" onClick={() => setShowEndConfirm(false)}>Keep monitoring</button><button className="confirm-stop" type="button" onClick={() => void endMonitoring()} disabled={endingMonitoring}>{endingMonitoring ? "Stopping…" : "End monitoring"}</button></div>
+              </div>
+            )}
+          </section>
+        </aside>
+      </div>
+    )}
     {summary && (
       <div className="modal-backdrop" onClick={() => setSummary(null)}>
         <section className="summary-modal" onClick={(event) => event.stopPropagation()}>
