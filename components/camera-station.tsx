@@ -9,6 +9,7 @@ import { startDogDetector, type DogBox, type DogDetectorController, type DogDete
 import { eventMessage, type EventType, type PawlyEvent } from "@/lib/domain";
 import { recordEventClip } from "@/lib/event-clip-recorder";
 import { startMotionAnalyzer } from "@/lib/motion-analyzer";
+import { createEncryptedRoom, participantRole } from "@/lib/livekit-security";
 
 interface Props { roomCode: string; }
 
@@ -50,6 +51,7 @@ export function CameraStation({ roomCode }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const remoteVoiceRef = useRef<HTMLAudioElement>(null);
   const roomRef = useRef<Room | null>(null);
+  const disposeEncryptionRef = useRef<(() => void) | null>(null);
   const wakeLockRef = useRef<{ release(): Promise<void> } | null>(null);
   const standbyTimerRef = useRef<number | null>(null);
   const dogDetectorRef = useRef<DogDetectorController | null>(null);
@@ -294,13 +296,16 @@ export function CameraStation({ roomCode }: Props) {
           audio: false,
         });
       }
-      const tokenResponse = await fetch("/api/livekit-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomCode, role: "camera" }) });
+      const tokenResponse = await fetch("/api/livekit-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomCode, mode: "camera" }) });
       if (!tokenResponse.ok) throw new Error((await tokenResponse.json()).error ?? "Could not open the private room");
-      const { token, serverUrl } = await tokenResponse.json();
-      const room = new Room({ adaptiveStream: true, dynacast: true, disconnectOnPageLeave: true });
+      const { token, serverUrl, e2eeKey } = await tokenResponse.json();
+      const encrypted = await createEncryptedRoom(e2eeKey, { adaptiveStream: true, dynacast: true, disconnectOnPageLeave: true });
+      const room = encrypted.room;
+      disposeEncryptionRef.current = encrypted.disposeEncryption;
       roomRef.current = room;
-      room.on(RoomEvent.Disconnected, () => setStatus("idle"));
+      room.on(RoomEvent.Disconnected, () => { setStatus("idle"); disposeEncryptionRef.current?.(); disposeEncryptionRef.current = null; });
       room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+        if (participantRole(participant) !== "owner") return;
         if (topic !== "pawly-command") return;
         try {
           const command = JSON.parse(new TextDecoder().decode(payload)) as { type?: string; zoom?: number; box?: DogBox | null };
@@ -325,7 +330,8 @@ export function CameraStation({ roomCode }: Props) {
           if (command.type === "stop_monitoring") void stop();
         } catch { /* Ignore malformed remote commands. */ }
       });
-      room.on(RoomEvent.TrackSubscribed, (track) => {
+      room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
+        if (participantRole(participant) !== "owner") return;
         if (track.kind !== Track.Kind.Audio || !remoteVoiceRef.current) return;
         track.attach(remoteVoiceRef.current);
         setOwnerVoiceActive(true);
@@ -336,7 +342,8 @@ export function CameraStation({ roomCode }: Props) {
         track.detach();
         setOwnerVoiceActive(false);
       });
-      room.on(RoomEvent.ParticipantConnected, () => {
+      room.on(RoomEvent.ParticipantConnected, (participant) => {
+        if (participantRole(participant) !== "owner") return;
         void publishAudioStatus(audioEnabledRef.current);
       });
       await room.connect(serverUrl, token);
@@ -368,6 +375,7 @@ export function CameraStation({ roomCode }: Props) {
     } catch (cause) {
       preparedStream?.getTracks().forEach((track) => track.stop());
       roomRef.current?.disconnect(); roomRef.current = null;
+      disposeEncryptionRef.current?.(); disposeEncryptionRef.current = null;
       setAudioEnabled(false);
       audioEnabledRef.current = false;
       setAudioStatus("off");
@@ -485,13 +493,15 @@ export function CameraStation({ roomCode }: Props) {
   useEffect(() => () => {
     clearStandbyTimer();
     roomRef.current?.disconnect();
+    disposeEncryptionRef.current?.();
+    disposeEncryptionRef.current = null;
   }, [clearStandbyTimer]);
 
   return <div className="camera-station">
     <div className="camera-header"><div><span className={`status-dot ${status}`} /><strong>{status === "live" ? "Monitoring live" : status === "connecting" ? "Opening room…" : status === "error" ? "Camera needs attention" : "Camera ready"}</strong></div><code>{roomCode}</code></div>
     <div className="camera-frame"><video ref={videoRef} autoPlay muted playsInline /><audio ref={remoteVoiceRef} autoPlay />{dogReading?.visible && dogReading.box && <div className={`dog-detection-box ${dogTargetMode === "owner_guided" ? "owner-guided" : ""}`} style={coverBoxStyle(dogReading.box, videoRef.current)}><span>{dogTargetMode === "owner_guided" ? "Your dog" : "Dog"} · {Math.round(dogReading.confidence * 100)}%</span></div>}<div className="camera-analysis-stack"><div className="camera-overlay"><span>Scene wake</span><strong>{Math.round(motionScore * 100)}%</strong></div><div className={`camera-overlay dog-analysis ${dogReading?.visible ? "detected" : ""}`}><span>{dogTargetMode === "owner_guided" ? "Owner-guided AI" : "Dog AI"}</span><strong>{dogStatus === "loading" ? "Loading model…" : dogStatus === "unavailable" ? "Detector unavailable" : dogReading?.visible ? `${Math.round(dogReading.confidence * 100)}% visible` : dogReading ? "No dog in view" : "Ready · scanning"}</strong>{dogStatus === "unavailable" && <button className="dog-retry-button" onClick={() => dogDetectorRef.current?.retry()}>Retry</button>}</div><div className={`camera-overlay sound-analysis ${audioEnabled ? "detected" : ""}`}><span>Room mic</span><strong>{audioStatus === "requesting" ? "Requesting" : audioEnabled ? `${Math.round(audioLevel * 100)}% · on` : audioStatus === "blocked" ? "Permission needed" : "Off"}</strong></div><div className={`camera-overlay clip-analysis ${clipStatus === "recording" ? "recording" : ""}`}><span>Event clip</span><strong>{clipStatus === "recording" ? "Saving 12s" : clipStatus === "saved" ? "Saved" : clipStatus === "unsupported" ? "Unavailable" : "Ready"}</strong></div><div className={`camera-overlay talkback-analysis ${ownerVoiceActive ? "detected" : ""}`}><span>Talkback</span><strong>{ownerVoiceActive ? "Owner speaking" : "Ready"}</strong></div></div>{status !== "live" && <div className="camera-empty"><div className="camera-lens">◉</div><h1>Let the room stay still.</h1><p>Place this device where the floor, bed, or crate is visible. Pawly will request camera and microphone access; video still works if sound is declined.</p>{status === "error" && <p className="error-text" role="alert">{error}</p>}<button className="button button-light" onClick={start} disabled={status === "connecting"}>{status === "connecting" ? "Connecting…" : status === "error" ? "Try camera again" : "Allow camera, sound & start"}</button></div>}{status === "live" && showMicrophoneHelp && <div className="microphone-permission-help" role="dialog" aria-live="polite"><span className="permission-icon">♪</span><h2>Turn on room sound</h2><p>Tap below to let Pawly use this iPad's microphone.</p><button className="button button-light" onClick={() => void enableAudio()} disabled={audioStatus === "requesting"}>{audioStatus === "requesting" ? "Opening microphone…" : "Allow microphone"}</button><small>If no permission box appears: iPad Settings → Apps → Chrome → Microphone. Turn it on, return here, then tap Allow microphone again.</small><button className="permission-later" onClick={() => setShowMicrophoneHelp(false)}>Not now</button></div>}</div>
     {status === "live" && <div className="camera-controls"><div><strong>Dark standby keeps monitoring active</strong><span>Do not lock this device—Pawly blacks out the page instead.</span>{!audioEnabled && <span className="camera-permission-tip">Need room sound? iPad Settings → Apps → Chrome → Microphone, then tap Enable sound.</span>}</div><div className="camera-control-actions">{audioEnabled ? <button className="button button-ghost camera-standby-button" onClick={() => void disableAudio()}>Sound on · turn off</button> : <button className="button button-ghost camera-standby-button" onClick={() => void enableAudio()} disabled={audioStatus === "requesting"}>{audioStatus === "requesting" ? "Opening sound…" : audioStatus === "blocked" ? "Retry sound permission" : "Enable sound"}</button>}<button className="button button-ghost camera-standby-button" onClick={enterStandby}>Dark standby now</button><button className="button button-danger" onClick={stop}>Stop monitoring</button></div></div>}
-    <p className="camera-privacy">Live video · {audioEnabled ? "sound analysis on" : "sound off"} · 12-second event clips only · saved locally · local adaptive AI</p>
+    <p className="camera-privacy">End-to-end encrypted · {audioEnabled ? "sound analysis on" : "sound off"} · 12-second event clips only · saved locally · local adaptive AI</p>
     {status === "live" && standby && <button className="standby-screen" onClick={() => wakeDisplay()} aria-label="Wake the camera monitoring display"><span className="standby-dot" /><strong>Pawly is monitoring</strong><small>Tap anywhere to show the camera for 60 seconds</small></button>}
   </div>;
 }

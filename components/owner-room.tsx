@@ -9,6 +9,7 @@ import type { PawlyEvent, SessionKind, SessionSummary } from "@/lib/domain";
 import type { DogBox } from "@/lib/dog-detector";
 import { deriveState, summarizeWithRules } from "@/lib/session-engine";
 import { dragSelectionToVideoBox, type DragSelection } from "@/lib/video-coordinates";
+import { createEncryptedRoom, participantRole } from "@/lib/livekit-security";
 
 interface Props { roomCode: string; }
 type ZoomMode = "checking" | "camera" | "view";
@@ -49,6 +50,7 @@ function coverBoxStyle(box: DogBox, video: HTMLVideoElement | null) {
 }
 
 async function requestSessionSummary(
+  roomCode: string,
   events: PawlyEvent[],
   startedAt: number,
   targetMinutes: number,
@@ -59,7 +61,7 @@ async function requestSessionSummary(
     const response = await fetch("/api/session-summary", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ dogName: "Your puppy", sessionKind, targetMinutes, startedAt, events }),
+      body: JSON.stringify({ roomCode, dogName: "Your puppy", sessionKind, targetMinutes, startedAt, events }),
     });
     if (!response.ok) throw new Error("AI summary unavailable");
     return await response.json() as SessionSummary;
@@ -97,6 +99,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const roomRef = useRef<Room | null>(null);
+  const disposeEncryptionRef = useRef<(() => void) | null>(null);
   const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<PawlyEvent[]>([]);
   const [error, setError] = useState("");
@@ -154,10 +157,12 @@ export function OwnerRoom({ roomCode }: Props) {
   const connect = useCallback(async () => {
     setError("");
     try {
-      const response = await fetch("/api/livekit-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomCode, role: "owner" }) });
+      const response = await fetch("/api/livekit-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomCode, mode: "owner" }) });
       if (!response.ok) throw new Error((await response.json()).error ?? "Could not join room");
-      const { token, serverUrl } = await response.json();
-      const room = new Room({ adaptiveStream: true, disconnectOnPageLeave: true });
+      const { token, serverUrl, e2eeKey } = await response.json();
+      const encrypted = await createEncryptedRoom(e2eeKey, { adaptiveStream: true, disconnectOnPageLeave: true });
+      const room = encrypted.room;
+      disposeEncryptionRef.current = encrypted.disposeEncryption;
       roomRef.current = room;
       const requestSavedClips = () => room.localParticipant.publishData(
         new TextEncoder().encode(JSON.stringify({ type: "request_saved_clips" })),
@@ -181,7 +186,8 @@ export function OwnerRoom({ roomCode }: Props) {
           await refreshClips();
         }).finally(() => setClipReceiveProgress(null));
       });
-      room.on(RoomEvent.TrackSubscribed, (track) => {
+      room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
+        if (participantRole(participant) !== "camera") return;
         if (track.kind === Track.Kind.Video && videoRef.current) track.attach(videoRef.current);
         if (track.kind === Track.Kind.Audio && audioRef.current) {
           audioRef.current.muted = true;
@@ -193,7 +199,8 @@ export function OwnerRoom({ roomCode }: Props) {
         }
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("off"); } track.detach(); });
-      room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+      room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+        if (participantRole(participant) !== "camera") return;
         if (topic === "pawly-event-history") {
           try {
             const history = JSON.parse(new TextDecoder().decode(payload)) as PawlyEvent[];
@@ -216,7 +223,7 @@ export function OwnerRoom({ roomCode }: Props) {
                 ? Math.min(...recent.map((event) => Date.parse(event.occurredAt)))
                 : Math.max(reviewSinceRef.current, now - 5 * 60 * 1000);
               setArrivalSummaryLoading(true);
-              void requestSessionSummary(recent, recapStartedAt, settings.targetMinutes, settings.sessionKind)
+              void requestSessionSummary(roomCode, recent, recapStartedAt, settings.targetMinutes, settings.sessionKind)
                 .then(setArrivalSummary)
                 .finally(() => setArrivalSummaryLoading(false));
               try {
@@ -261,9 +268,12 @@ export function OwnerRoom({ roomCode }: Props) {
           if (document.hidden && noteworthy && Notification.permission === "granted") new Notification(event.message, { body: "Open Pawly to check the room timeline." });
         } catch { /* ignore malformed participant data */ }
       });
-      room.on(RoomEvent.ParticipantConnected, () => { setConnected(true); setZoomMode("checking"); void requestSavedClips(); void requestEventHistory(); void requestCameraZoom(); });
+      room.on(RoomEvent.ParticipantConnected, (participant) => {
+        if (participantRole(participant) !== "camera") return;
+        setConnected(true); setZoomMode("checking"); void requestSavedClips(); void requestEventHistory(); void requestCameraZoom();
+      });
       room.on(RoomEvent.ParticipantDisconnected, () => {
-        const cameraStillOnline = room.remoteParticipants.size > 0;
+        const cameraStillOnline = [...room.remoteParticipants.values()].some((participant) => participantRole(participant) === "camera");
         setConnected(cameraStillOnline);
         if (!cameraStillOnline) {
           void room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
@@ -274,11 +284,13 @@ export function OwnerRoom({ roomCode }: Props) {
           setDogTrack(null);
         }
       });
-      room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("unknown"); setDogTrack(null); });
+      room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("unknown"); setDogTrack(null); disposeEncryptionRef.current?.(); disposeEncryptionRef.current = null; });
       await room.connect(serverUrl, token);
-      setConnected(room.remoteParticipants.size > 0);
-      if (room.remoteParticipants.size > 0) { void requestSavedClips(); void requestEventHistory(); void requestCameraZoom(); }
+      const cameraOnline = [...room.remoteParticipants.values()].some((participant) => participantRole(participant) === "camera");
+      setConnected(cameraOnline);
+      if (cameraOnline) { void requestSavedClips(); void requestEventHistory(); void requestCameraZoom(); }
       for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) {
+        if (participantRole(participant) !== "camera") continue;
         if (publication.track?.kind === Track.Kind.Video && videoRef.current) publication.track.attach(videoRef.current);
         if (publication.track?.kind === Track.Kind.Audio && audioRef.current) {
           audioRef.current.muted = true;
@@ -296,7 +308,7 @@ export function OwnerRoom({ roomCode }: Props) {
     // Connection state is synchronized from the external LiveKit room.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void connect();
-    return () => { void roomRef.current?.disconnect(); };
+    return () => { void roomRef.current?.disconnect(); disposeEncryptionRef.current?.(); disposeEncryptionRef.current = null; };
   }, [connect]);
   useEffect(() => {
     if (!connected || zoomMode !== "checking") return;
@@ -332,7 +344,7 @@ export function OwnerRoom({ roomCode }: Props) {
     if (!useAi) { setSummary(rulesSummary); return; }
     setSummaryLoading(true);
     try {
-      setSummary(await requestSessionSummary(events, startedAt, targetMinutes, sessionKind));
+      setSummary(await requestSessionSummary(roomCode, events, startedAt, targetMinutes, sessionKind));
     } catch { setSummary(rulesSummary); } finally { setSummaryLoading(false); }
   };
 
@@ -416,7 +428,7 @@ export function OwnerRoom({ roomCode }: Props) {
         new TextEncoder().encode(JSON.stringify({ type: "stop_monitoring" })),
         { reliable: true, topic: "pawly-command" },
       );
-      setSummary(await requestSessionSummary(events, startedAt, targetMinutes, sessionKind));
+      setSummary(await requestSessionSummary(roomCode, events, startedAt, targetMinutes, sessionKind));
       await room.disconnect();
       setConnected(false);
       setSettingsOpen(false);
@@ -548,7 +560,7 @@ export function OwnerRoom({ roomCode }: Props) {
     </nav>
     <div className="dashboard-grid">
       <section className="live-panel">
-        <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><span className="private-room-label">Private room</span></div>
+        <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><span className="private-room-label">End-to-end encrypted</span></div>
         <div className="owner-video">
           <video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} />
           <audio ref={audioRef} playsInline />
@@ -634,13 +646,10 @@ export function OwnerRoom({ roomCode }: Props) {
           </section>
 
           <section className="settings-card">
-            <div className="settings-card-heading"><strong>Private room</strong><button className="text-action" type="button" onClick={() => setRoomCodeVisible((current) => !current)}>{roomCodeVisible ? "Hide" : "Show"}</button></div>
-            <code className="masked-room-code">{roomCodeVisible ? roomCode : maskedRoomCode}</code>
-            <div className="settings-action-row">
-              <button className="settings-action" type="button" onClick={() => void copyRoomLink("camera")}>{roomLinkCopied === "camera" ? "Camera link copied" : "Copy camera link"}</button>
-              <button className="settings-action" type="button" onClick={() => void copyRoomLink("owner")}>{roomLinkCopied === "owner" ? "Owner link copied" : "Copy owner link"}</button>
-            </div>
-            <Link className="settings-text-link" href="/setup">Manage pairing and room keys →</Link>
+            <div className="settings-card-heading"><strong>Encrypted access</strong><span>Protected</span></div>
+            <p>Only your signed-in owner account and cameras you explicitly pair can enter. Live media and room events are end-to-end encrypted.</p>
+            <div className="security-mini-list"><span>◆ One-time camera pairing</span><span>◆ Short-lived connection tokens</span><span>◆ Revoke devices instantly</span></div>
+            <Link className="settings-text-link" href="/setup">Manage approved devices →</Link>
           </section>
 
           <section className="settings-card">

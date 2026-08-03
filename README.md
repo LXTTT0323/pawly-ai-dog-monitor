@@ -2,13 +2,19 @@
 
 Pawly turns a spare phone, tablet, or laptop into a private, dog-aware room monitor. One device stays with the dog; another opens a live dashboard that shows meaningful activity, saves short event clips, and produces an evidence-based AI behavior summary.
 
-**Live demo:** [pawly-sigma.vercel.app](https://pawly-sigma.vercel.app)
+## Security model
+
+Pawly uses owner sign-in, one-time camera pairing, server-enforced room ownership, short-lived scoped LiveKit tokens, revocable device credentials, and per-room end-to-end encryption. A room URL is an identifier only and does not grant access. Continuous video is not stored, and AI summaries receive event metadata rather than live media.
+
+See [docs/SECURITY.md](docs/SECURITY.md) for the threat model, pairing flow, realtime permissions, and data-handling guarantees.
+
+**Live demo:** [pawly-coach-beta.lxttt.chatgpt.site](https://pawly-coach-beta.lxttt.chatgpt.site)
 
 > Built for the OpenAI Codex Build Week. Pawly reuses hardware people already own instead of requiring another dedicated pet camera.
 
 ## What Pawly does
 
-- Creates a cryptographically random 12-character room per browser profile, with separate camera/viewer experiences and an explicit room-key rotation control.
+- Creates an account-owned private room and pairs each camera through a single-use, five-minute link.
 - Streams live video and optional room audio between modern browsers using LiveKit and WebRTC.
 - Detects dog presence locally with MediaPipe EfficientDet-Lite0.
 - Uses adaptive sampling so dog detection runs faster after meaningful movement and slower while the room is settled.
