@@ -4,8 +4,10 @@ import {
   readFile,
   readdir,
   rename,
+  rm,
   writeFile,
 } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 await mkdir("dist/.openai", { recursive: true });
@@ -101,3 +103,39 @@ export default {
 };
 `,
 );
+
+// Sites uploads Worker modules directly, so package imports such as
+// react/jsx-runtime must be bundled into the entry file before the archive is
+// saved. A dry-run uses Wrangler's production bundler without publishing.
+const workerBundleDirectory = path.resolve(".sites-worker-bundle");
+const wranglerExecutable = path.resolve(
+  "node_modules/.bin",
+  process.platform === "win32" ? "wrangler.cmd" : "wrangler",
+);
+
+await rm(workerBundleDirectory, { force: true, recursive: true });
+execFileSync(
+  wranglerExecutable,
+  [
+    "deploy",
+    workerEntryPath,
+    "--dry-run",
+    "--outdir",
+    workerBundleDirectory,
+    "--compatibility-date",
+    "2026-07-01",
+    "--compatibility-flags",
+    "nodejs_compat",
+    "--assets",
+    path.resolve("dist/client"),
+  ],
+  {
+    shell: process.platform === "win32",
+    stdio: "inherit",
+  },
+);
+await copyFile(
+  path.join(workerBundleDirectory, "index.js"),
+  workerEntryPath,
+);
+await rm(workerBundleDirectory, { force: true, recursive: true });
