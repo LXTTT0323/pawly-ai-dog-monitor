@@ -20,7 +20,7 @@ export default function Home() {
         <div className="hero-copy">
           <span className="eyebrow"><span className="pulse-dot" /> No new camera · use a screen you already own</span>
           <h1>See what happens<br /><em>after you leave.</em></h1>
-          <p className="hero-lede">Pawly turns a spare phone, tablet, or computer into a private pet camera that follows your dog, notices meaningful movement and sound, and gives you a useful recap.</p>
+          <p className="hero-lede">Pawly turns spare phones, tablets, and computers into private AI cameras that follow your dog or cat, notice meaningful movement and sound, and give you a useful recap.</p>
           <div className="hero-actions">
             <Link className="button button-primary" href="/setup">Set up a spare device <span aria-hidden="true">→</span></Link>
             <a className="text-link" href="#how">See how it works</a>
@@ -48,7 +48,7 @@ export default function Home() {
         <div className="shell trust-grid trust-grid-four">
           <p>Useful now. Smarter over time.</p>
           <div><strong>Any modern device</strong><span>Phone, tablet, laptop, or desktop</span></div>
-          <div><strong>Dog-aware</strong><span>Local detection and continuous tracking</span></div>
+          <div><strong>Pet-aware</strong><span>Local dog and cat detection with continuous tracking</span></div>
           <div><strong>Two-way audio</strong><span>Listen or talk only when you choose</span></div>
         </div>
       </section>
@@ -57,7 +57,7 @@ export default function Home() {
         <span className="eyebrow">The simplest useful loop</span>
         <div className="section-heading">
           <h2>A room camera that<br />doesn&apos;t demand attention.</h2>
-          <p>Check the live stream whenever you want. Pawly builds a quiet timeline, frames the dog it is tracking, and automatically saves a short moment when meaningful dog movement or sustained sound begins.</p>
+          <p>Check any camera whenever you want. Pawly builds a quiet timeline, frames the pet it is tracking, and automatically saves a short moment when meaningful movement or sustained sound begins.</p>
         </div>
         <div className="steps-grid">
           <article><span className="step-number">01</span><div className="step-icon">◎</div><h3>Place a spare screen</h3><p>Open camera mode, allow the camera, plug it in, and leave the page visible. Room sound is optional.</p></article>
@@ -77,10 +77,10 @@ export default function Home() {
       </section>
 
       <section className="section shell intelligence-section">
-        <div className="intelligence-copy"><span className="eyebrow">AI that knows when to wake up</span><h2>Light on the device.<br />Clear in the result.</h2><p>Pawly starts with lightweight local motion and audio checks. Dog detection becomes more attentive when the room changes. Large AI never watches the continuous stream.</p></div>
+        <div className="intelligence-copy"><span className="eyebrow">AI that knows when to wake up</span><h2>Light on the device.<br />Clear in the result.</h2><p>Pawly starts with lightweight local motion and audio checks. Pet detection becomes more attentive when the room changes. Large AI never watches the continuous stream.</p></div>
         <div className="intelligence-flow" aria-label="Pawly adaptive analysis pipeline">
           <div><small>Always local</small><strong>Motion + sound gate</strong><span>Low-resolution, adaptive sampling</span></div><b aria-hidden="true">→</b>
-          <div><small>When useful</small><strong>Dog presence + location</strong><span>On-device object detection and tracking</span></div><b aria-hidden="true">→</b>
+          <div><small>When useful</small><strong>Pet presence + location</strong><span>On-device dog and cat detection and tracking</span></div><b aria-hidden="true">→</b>
           <div><small>What you see</small><strong>Meaningful episodes</strong><span>Timeline, short clips, and AI recap</span></div>
         </div>
       </section>
@@ -88,7 +88,7 @@ export default function Home() {
       <section id="privacy" className="privacy-section">
         <div className="shell privacy-card">
           <div><span className="eyebrow light">A camera belongs to your home</span><h2>Private by default,<br />useful by choice.</h2></div>
-          <div className="privacy-list"><p><span>01</span> Live camera and sound travel through an encrypted real-time room.</p><p><span>02</span> Dog, motion, and sound detection run on the camera device.</p><p><span>03</span> Only timestamped event text—not the live feed—is sent for AI summaries.</p><p><span>04</span> Short event clips stay in your browser; Pawly stores no continuous footage.</p></div>
+          <div className="privacy-list"><p><span>01</span> Live camera and sound travel through an encrypted real-time room.</p><p><span>02</span> Pet, motion, and sound detection run on the camera device.</p><p><span>03</span> Only timestamped event text—not the live feed—is sent for AI summaries.</p><p><span>04</span> Short event clips stay in your browser; Pawly stores no continuous footage.</p></div>
         </div>
       </section>
 

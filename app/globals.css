@@ -131,3 +131,31 @@ html,body{max-width:100%;overflow-x:hidden}.hero-copy,.setup-intro,.setup-panel,
 @media(max-width:600px){
   .security-account span{display:none}.pair-card{margin-top:4vh;padding:34px 22px;border-radius:24px}.pairing-card>div:first-child{align-items:flex-start;flex-direction:column}.device-row{align-items:flex-start}.device-row button{flex:0 0 auto}
 }
+
+/* Beta 2: persistent pet profiles, multi-camera control, soundboard, and mobile recap. */
+.pet-profile-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.85fr);gap:24px;align-items:center;padding:22px;border-radius:20px;background:linear-gradient(145deg,var(--mint),#f8efe4)}
+.pet-profile-card h2{margin:6px 0;font-family:var(--font-serif);font-size:27px;line-height:1.05}.pet-profile-card p{margin:0!important;color:#667d74!important}
+.pet-profile-form{display:grid;grid-template-columns:minmax(0,1fr) 96px auto;gap:8px}.pet-profile-form input,.pet-profile-form select{min-width:0;height:43px;border:1px solid rgba(43,83,67,.17);border-radius:12px;background:#fff;color:var(--ink);padding:0 12px;font:inherit;font-size:11px}.pet-profile-form button{height:43px;border:0;border-radius:12px;background:var(--ink);color:#fff;padding:0 15px;font-size:10px;font-weight:850}.pet-profile-form button:disabled{opacity:.45}
+
+.camera-device-tabs{display:flex;gap:8px;overflow-x:auto;margin:0 0 10px;padding:1px 1px 5px}.camera-device-tabs>button,.add-camera-tab{flex:0 0 auto;min-width:132px;display:grid;grid-template-columns:auto 1fr;column-gap:7px;align-items:center;text-align:left;border:1px solid var(--line);border-radius:14px;background:#fff;color:var(--ink);padding:9px 12px;text-decoration:none}.camera-device-tabs>button.selected{border-color:#4d8b70;background:var(--mint);box-shadow:inset 0 0 0 1px rgba(77,139,112,.2)}.camera-device-tabs strong{font-size:10px}.camera-device-tabs small{grid-column:2;color:#748a81;font-size:8px;text-transform:capitalize}.camera-device-tabs .status-dot{width:8px;height:8px;grid-row:1/3}.add-camera-tab{display:flex;align-items:center;justify-content:center;min-width:104px;font-size:9px;font-weight:850}
+
+.camera-quick-controls{position:absolute;z-index:6;top:18px;left:50%;transform:translateX(-50%);display:flex;gap:6px}.camera-quick-controls button{min-height:37px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:rgba(13,39,31,.78);backdrop-filter:blur(10px);color:#fff;padding:0 12px;font-size:9px;font-weight:850;box-shadow:0 8px 24px rgba(7,21,16,.17)}.camera-quick-controls button.active{background:#c88649}
+.zoom-control{min-width:214px;align-items:stretch}.zoom-control>div{gap:7px}.zoom-control>div>button{flex:0 0 29px;width:29px;border-radius:10px;font-size:9px;font-weight:850}.zoom-control input[type=range]{min-width:80px;accent-color:#9ed1b8}.zoom-control strong{font-variant-numeric:tabular-nums}
+
+.soundboard-card{margin:0 4px 12px;padding:15px;border:1px solid rgba(68,104,88,.12);border-radius:16px;background:#fff}.soundboard-heading{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.soundboard-heading>div{display:grid;gap:4px}.soundboard-heading strong{font-size:11px}.soundboard-heading>span{max-width:100px;color:#748a81;font-size:8px;text-align:right}.soundboard-actions{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 9px}.soundboard-actions>button,.sound-button-wrap>button:first-child{min-height:36px;border:0;border-radius:999px;background:var(--mint);color:var(--ink);padding:0 12px;font-size:9px;font-weight:850}.soundboard-actions button.active{background:#244f40;color:#fff}.soundboard-actions button.recording{background:#f4d5c8;color:#8a3926}.soundboard-actions button:disabled{opacity:.45}.soundboard-card>small{display:block;color:#748a81;font-size:8px;line-height:1.5}.sound-button-wrap{position:relative;display:flex}.sound-button-wrap>button:first-child{padding-right:28px}.sound-delete{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:22px;height:22px;border:0;border-radius:50%;background:rgba(255,255,255,.75);color:#71867e}
+.camera-health-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:12px 0}.camera-health-grid span{display:grid;gap:3px;padding:10px;border-radius:11px;background:var(--cream);color:#60776d;font-size:9px}.camera-health-grid b{color:var(--ink);font-size:9px}
+
+.recap-window-actions{position:absolute;z-index:4;top:15px;right:15px;display:flex;gap:7px}.recap-window-actions button{display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:50%;background:#fff;color:var(--ink);font-size:18px;box-shadow:0 6px 18px rgba(7,21,16,.08)}.summary-modal.expanded{width:min(980px,calc(100vw - 30px));max-width:980px;max-height:calc(100svh - 30px)}.modal-backdrop.recap-expanded{padding:15px}
+
+@media(max-width:800px){
+  .pet-profile-card{grid-template-columns:1fr}.pet-profile-form{grid-template-columns:minmax(0,1fr) 92px}.pet-profile-form button{grid-column:1/-1}
+  .camera-quick-controls{top:auto;bottom:14px;left:14px;transform:none;max-width:calc(100% - 28px);overflow-x:auto}.camera-quick-controls button{flex:0 0 auto}
+  .zoom-control{min-width:190px}.voice-control-stack{bottom:64px}
+}
+@media(max-width:600px){
+  .camera-device-tabs{margin-inline:-2px}.camera-device-tabs>button{min-width:120px}.owner-video{height:56svh}
+  .zoom-control{top:10px;right:10px;min-width:172px;padding:8px}.zoom-control>span{display:none}.zoom-control input[type=range]{width:76px}
+  .dog-target-controls{top:58px}.camera-quick-controls{bottom:10px}.voice-control-stack{bottom:58px}
+  .soundboard-card{margin-inline:0}.soundboard-actions{flex-direction:column}.soundboard-actions>button,.sound-button-wrap>button:first-child{width:100%;min-height:42px}.sound-button-wrap{width:100%}
+  .modal-backdrop{padding:0}.summary-modal,.summary-modal.expanded{width:100%;max-width:none;height:100svh;max-height:none;border-radius:0;padding:72px 22px calc(30px + env(safe-area-inset-bottom));overflow:auto}.recap-window-actions{position:fixed;top:calc(12px + env(safe-area-inset-top));right:12px}.summary-modal h2{padding-right:50px}
+}

@@ -17,6 +17,13 @@ interface RoomResponse {
   devices: Device[];
 }
 
+interface PetProfile {
+  id: string;
+  name: string;
+  species: "dog" | "cat";
+  isPrimary: boolean;
+}
+
 export function SetupClient({ user }: { user: PawlyUser }) {
   const [room, setRoom] = useState<RoomResponse["room"]>(null);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -25,6 +32,10 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   const [pairing, setPairing] = useState<{ url: string; expiresAt: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [pets, setPets] = useState<PetProfile[]>([]);
+  const [petName, setPetName] = useState("");
+  const [petSpecies, setPetSpecies] = useState<"dog" | "cat">("dog");
+  const [savingPet, setSavingPet] = useState(false);
 
   const loadRoom = useCallback(async () => {
     setStatus("loading");
@@ -39,6 +50,11 @@ export function SetupClient({ user }: { user: PawlyUser }) {
       if (!response.ok || !data.room) throw new Error(data.error ?? "Could not open your room");
       setRoom(data.room);
       setDevices(data.devices ?? []);
+      const profileResponse = await fetch("/api/profile", { cache: "no-store" });
+      if (profileResponse.ok) {
+        const profile = await profileResponse.json() as { pets?: PetProfile[] };
+        setPets(profile.pets ?? []);
+      }
       setStatus("ready");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not open your room");
@@ -79,6 +95,27 @@ export function SetupClient({ user }: { user: PawlyUser }) {
     setRevoking(null);
   }
 
+  async function savePet() {
+    if (!petName.trim()) return;
+    setSavingPet(true);
+    setError("");
+    try {
+      const response = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: petName, species: petSpecies }),
+      });
+      const data = await response.json() as { pets?: PetProfile[]; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Could not save your pet");
+      setPets(data.pets ?? []);
+      setPetName("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save your pet");
+    } finally {
+      setSavingPet(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <nav className="nav shell">
@@ -107,6 +144,24 @@ export function SetupClient({ user }: { user: PawlyUser }) {
           {status === "error" && <div className="secure-error" role="alert"><strong>Room unavailable</strong><p>{error}</p><button className="button button-dark" onClick={() => void loadRoom()}>Try again</button></div>}
 
           {status === "ready" && room && <>
+            <div className="pet-profile-card">
+              <div>
+                <span className="eyebrow">Your pets</span>
+                <h2>{pets.length ? pets.map((pet) => pet.name).join(" & ") : "Tell Pawly who to watch"}</h2>
+                <p>{pets.length ? "Pawly will use species-aware detection and wording in your live room." : "Add a dog or cat now. You can add more pets later."}</p>
+              </div>
+              <div className="pet-profile-form">
+                <input aria-label="Pet name" placeholder="Pet name" value={petName} onChange={(event) => setPetName(event.target.value)} maxLength={40} />
+                <select aria-label="Pet species" value={petSpecies} onChange={(event) => setPetSpecies(event.target.value === "cat" ? "cat" : "dog")}>
+                  <option value="dog">Dog</option>
+                  <option value="cat">Cat</option>
+                </select>
+                <button type="button" onClick={() => void savePet()} disabled={!petName.trim() || savingPet}>{savingPet ? "Saving…" : "Add pet"}</button>
+              </div>
+            </div>
+
+            <div className="divider" />
+
             <div className="setup-step">
               <span>1</span>
               <div>

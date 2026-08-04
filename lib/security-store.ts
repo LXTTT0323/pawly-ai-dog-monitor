@@ -203,6 +203,22 @@ export async function listDevices(roomId: string): Promise<DeviceRecord[]> {
   return (result.results ?? []).map(mapDevice);
 }
 
+export async function getOwnedDevice(ownerEmail: string, deviceId: string): Promise<DeviceRecord | null> {
+  const db = await getDatabase();
+  if (!db) {
+    const device = memory.pawlySecurityMemory!.devices.get(deviceId);
+    if (!device || device.revokedAt) return null;
+    const room = memory.pawlySecurityMemory!.rooms.get(device.roomId);
+    return room?.ownerEmail === ownerEmail ? device : null;
+  }
+  const row = await db.prepare(`
+    SELECT devices.id, devices.room_id, devices.name, devices.token_hash, devices.created_at, devices.last_seen_at, devices.revoked_at
+    FROM devices INNER JOIN rooms ON rooms.id = devices.room_id
+    WHERE devices.id = ? AND devices.revoked_at IS NULL AND rooms.owner_email = ?
+  `).bind(deviceId, ownerEmail).first<Record<string, unknown>>();
+  return row ? mapDevice(row) : null;
+}
+
 export async function revokeDevice(roomId: string, deviceId: string): Promise<DeviceRecord | null> {
   const db = await getDatabase();
   if (!db) {

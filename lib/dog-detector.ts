@@ -1,6 +1,7 @@
 import type { ObjectDetector as MediaPipeObjectDetector } from "@mediapipe/tasks-vision";
 
 export type DogDetectorStatus = "loading" | "ready" | "unavailable";
+export type PetKind = "dog" | "cat";
 
 export interface DogBox {
   x: number;
@@ -13,6 +14,7 @@ export interface DogReading {
   visible: boolean;
   confidence: number;
   box: DogBox | null;
+  petKind: PetKind | null;
   targetMode: "auto" | "owner_guided";
   inferenceMs: number;
   observedAt: number;
@@ -113,6 +115,7 @@ export function startDogDetector(
   let lastConfidence = 0;
   let consecutiveMisses = 0;
   let ownerGuided = false;
+  let lastPetKind: PetKind | null = null;
 
   const schedule = (delay?: number) => {
     if (stopped) return;
@@ -151,7 +154,7 @@ export function startDogDetector(
       }
       const result = detector?.detect(inferenceCanvas);
       const candidates = result?.detections
-        .filter((detection) => detection.categories.some((category) => category.categoryName.toLowerCase() === "dog"))
+        .filter((detection) => detection.categories.some((category) => ["dog", "cat"].includes(category.categoryName.toLowerCase())))
         .map((detection) => {
           const detectedBox = detection.boundingBox;
           if (!detectedBox) return null;
@@ -168,9 +171,14 @@ export function startDogDetector(
             height: localBox.height * searchBox.height,
           } : localBox;
           const category = detection.categories
-            .filter((item) => item.categoryName.toLowerCase() === "dog")
+            .filter((item) => ["dog", "cat"].includes(item.categoryName.toLowerCase()))
             .sort((left, right) => right.score - left.score)[0];
-          return { detection, box: mappedBox, confidence: category?.score ?? 0 };
+          return {
+            detection,
+            box: mappedBox,
+            confidence: category?.score ?? 0,
+            petKind: category?.categoryName.toLowerCase() as PetKind | undefined,
+          };
         })
         .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
         .sort((left, right) => {
@@ -191,6 +199,7 @@ export function startDogDetector(
         trackingUntil = Date.now() + TRACKING_GRACE_MS;
         readingBox = lastBox;
         visible = true;
+        lastPetKind = candidate.petKind ?? lastPetKind;
       } else if (lastBox && Date.now() < trackingUntil) {
         consecutiveMisses += 1;
         confidence = lastConfidence * Math.pow(0.86, consecutiveMisses);
@@ -205,6 +214,7 @@ export function startDogDetector(
         visible,
         confidence,
         box: readingBox,
+        petKind: visible ? lastPetKind : null,
         targetMode: ownerGuided ? "owner_guided" : "auto",
         inferenceMs: performance.now() - startedAt,
         observedAt: Date.now(),
@@ -233,7 +243,7 @@ export function startDogDetector(
       detector = await ObjectDetector.createFromOptions(vision, {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
         runningMode: "IMAGE",
-        categoryAllowlist: ["dog"],
+        categoryAllowlist: ["dog", "cat"],
         maxResults: 3,
         scoreThreshold: 0.2,
       });

@@ -23,6 +23,8 @@ export interface PawlyEvent {
   confidence: number;
   motionScore?: number;
   message: string;
+  deviceId?: string;
+  deviceName?: string;
 }
 
 export interface SessionSummary {
@@ -55,13 +57,13 @@ export function isRoomCode(value: string): boolean {
 export function eventMessage(type: EventType): string {
   const messages: Record<EventType, string> = {
     monitoring_started: "Monitoring started",
-    motion_active: "Dog movement increased",
-    settled: "Dog settled again",
-    dog_visible: "Dog detected in the room",
-    dog_not_visible: "Dog is out of view",
+    motion_active: "Pet movement increased",
+    settled: "Pet settled again",
+    dog_visible: "Pet detected in the room",
+    dog_not_visible: "Pet is out of view",
     sound_active: "Sustained sound noticed",
     sound_settled: "The room became quiet again",
-    repeated_movement: "Repeated dog movement noticed",
+    repeated_movement: "Repeated pet movement noticed",
     camera_paused: "Camera page is not visible",
     camera_resumed: "Camera monitoring resumed",
     camera_repositioned: "Camera repositioned",

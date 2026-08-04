@@ -33,6 +33,7 @@ export async function POST(request: Request) {
 
     let identity: string;
     let metadata: Record<string, string>;
+    let cameraDevice: { id: string; name: string } | null = null;
     if (mode === "owner") {
       const user = await getPawlyUser();
       if (!user || user.email !== room.ownerEmail) {
@@ -52,7 +53,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "This camera is not paired. Ask the owner for a new pairing link." }, { status: 401, headers: noStoreHeaders() });
       }
       identity = `camera-${verified.device.id}`;
-      metadata = { role: "camera", roomId: room.id, deviceId: verified.device.id };
+      metadata = { role: "camera", roomId: room.id, deviceId: verified.device.id, deviceName: verified.device.name };
+      cameraDevice = { id: verified.device.id, name: verified.device.name };
       if (!await consumeRateLimit(`livekit:camera:${verified.device.id}`, 60, 10 * 60 * 1000)) {
         return NextResponse.json({ error: "Too many connection attempts" }, { status: 429, headers: noStoreHeaders() });
       }
@@ -72,6 +74,7 @@ export async function POST(request: Request) {
       serverUrl,
       e2eeKey: await decryptRoomKey(room),
       role: mode,
+      device: cameraDevice,
     }, { headers: noStoreHeaders() });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Secure room connection failed" }, { status: 403, headers: noStoreHeaders() });

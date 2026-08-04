@@ -3,17 +3,17 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
-  title: { default: "Pawly — AI Dog Monitor", template: "%s · Pawly" },
+  title: { default: "Pawly — AI Pet Monitor", template: "%s · Pawly" },
   description: "Turn any spare device into a private AI pet camera that understands the moments that matter.",
   openGraph: {
     title: "Pawly — See what happens after you leave.",
-    description: "Turn any spare device into a private, dog-aware AI pet camera.",
-    images: [{ url: "/og.png", width: 1728, height: 915, alt: "Pawly dog-aware room monitor" }],
+    description: "Turn any spare device into a private AI camera for dogs and cats.",
+    images: [{ url: "/og.png", width: 1728, height: 915, alt: "Pawly private AI pet monitor" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Pawly — See what happens after you leave.",
-    description: "Turn any spare device into a private, dog-aware AI pet camera.",
+    description: "Turn any spare device into a private AI camera for dogs and cats.",
     images: ["/og.png"],
   },
 };

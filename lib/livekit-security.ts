@@ -1,4 +1,4 @@
-import { ExternalE2EEKeyProvider, Room, type RemoteParticipant } from "livekit-client";
+import { ExternalE2EEKeyProvider, Room, type Participant } from "livekit-client";
 
 export async function createEncryptedRoom(e2eeKey: string, options: ConstructorParameters<typeof Room>[0]) {
   if (!supportsE2EE()) {
@@ -13,7 +13,7 @@ export async function createEncryptedRoom(e2eeKey: string, options: ConstructorP
   };
 }
 
-export function participantRole(participant?: RemoteParticipant | null): "owner" | "camera" | null {
+export function participantRole(participant?: Participant | null): "owner" | "camera" | null {
   if (!participant?.metadata) return null;
   try {
     const metadata = JSON.parse(participant.metadata) as { role?: string };

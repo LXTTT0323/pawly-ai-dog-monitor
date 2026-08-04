@@ -6,13 +6,33 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { Brand } from "./brand";
 import { clipFileName, deleteClip, listSavedClips, parseClipFileName, saveClip, type SavedClip } from "@/lib/clip-store";
 import type { PawlyEvent, SessionKind, SessionSummary } from "@/lib/domain";
-import type { DogBox } from "@/lib/dog-detector";
+import type { DogBox, PetKind } from "@/lib/dog-detector";
 import { deriveState, summarizeWithRules } from "@/lib/session-engine";
 import { dragSelectionToVideoBox, type DragSelection } from "@/lib/video-coordinates";
 import { createEncryptedRoom, participantRole } from "@/lib/livekit-security";
+import { deleteSound, listSavedSounds, saveSound, type SavedSound } from "@/lib/sound-store";
 
 interface Props { roomCode: string; }
 type ZoomMode = "checking" | "camera" | "view";
+interface CameraHealth {
+  camera: boolean;
+  microphone: boolean;
+  width?: number;
+  height?: number;
+  frameRate?: number;
+  facingMode?: "user" | "environment";
+  torchSupported?: boolean;
+  torchOn?: boolean;
+  detector?: string;
+  observedAt?: number;
+  connectionQuality?: string;
+}
+interface CameraDeviceState {
+  identity: string;
+  id: string;
+  name: string;
+  health?: CameraHealth;
+}
 
 const stateCopy = { calm: ["Calm", "The room has settled"], active: ["Active", "A sustained change was noticed"], out_of_view: ["Out of view", "The camera is still online"], unavailable: ["Unavailable", "The camera needs attention"], connecting: ["Connecting", "Looking for the camera"] } as const;
 const durationOptions: Record<SessionKind, number[]> = {
@@ -61,7 +81,7 @@ async function requestSessionSummary(
     const response = await fetch("/api/session-summary", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ roomCode, dogName: "Your puppy", sessionKind, targetMinutes, startedAt, events }),
+      body: JSON.stringify({ roomCode, dogName: "Your pet", sessionKind, targetMinutes, startedAt, events }),
     });
     if (!response.ok) throw new Error("AI summary unavailable");
     return await response.json() as SessionSummary;
@@ -78,6 +98,19 @@ function eventSymbol(type: PawlyEvent["type"]) {
   if (type === "camera_repositioned") return "↻";
   if (type.includes("camera")) return "!";
   return "✓";
+}
+
+function cameraInfo(participant: { identity: string; metadata?: string | null }): CameraDeviceState {
+  try {
+    const metadata = JSON.parse(participant.metadata ?? "{}") as { deviceId?: string; deviceName?: string };
+    return {
+      identity: participant.identity,
+      id: metadata.deviceId ?? participant.identity.replace(/^camera-/, ""),
+      name: metadata.deviceName?.trim() || "Pet camera",
+    };
+  } catch {
+    return { identity: participant.identity, id: participant.identity.replace(/^camera-/, ""), name: "Pet camera" };
+  }
 }
 
 function SavedClipCard({ clip, onDelete }: { clip: SavedClip; onDelete(id: string): void }) {
@@ -99,6 +132,9 @@ export function OwnerRoom({ roomCode }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const roomRef = useRef<Room | null>(null);
+  const cameraTracksRef = useRef(new Map<string, { video?: Track; audio?: Track }>());
+  const selectedCameraIdentityRef = useRef<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const disposeEncryptionRef = useRef<(() => void) | null>(null);
   const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<PawlyEvent[]>([]);
@@ -134,16 +170,80 @@ export function OwnerRoom({ roomCode }: Props) {
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [endingMonitoring, setEndingMonitoring] = useState(false);
   const [trackingAssistReady, setTrackingAssistReady] = useState(false);
+  const [cameras, setCameras] = useState<CameraDeviceState[]>([]);
+  const [selectedCameraIdentity, setSelectedCameraIdentity] = useState<string | null>(null);
+  const [petKind, setPetKind] = useState<PetKind | null>(null);
+  const [savedSounds, setSavedSounds] = useState<SavedSound[]>([]);
+  const [recordingSound, setRecordingSound] = useState<"No" | "Good job" | null>(null);
+  const [ambientPlaying, setAmbientPlaying] = useState(false);
+  const [soundBusy, setSoundBusy] = useState(false);
+  const [recapExpanded, setRecapExpanded] = useState(false);
+  const [cameraMediaRevision, setCameraMediaRevision] = useState(0);
   const reviewSinceRef = useRef(Date.now() - 4 * 60 * 60 * 1000);
   const autoSummaryRequestedRef = useRef(false);
   const sessionSettingsRef = useRef({ sessionKind, targetMinutes });
   const state = deriveState(events, connected);
+
+  useEffect(() => {
+    selectedCameraIdentityRef.current = selectedCameraIdentity;
+    const selectedTracks = selectedCameraIdentity ? cameraTracksRef.current.get(selectedCameraIdentity) : null;
+    for (const tracks of cameraTracksRef.current.values()) {
+      tracks.video?.detach();
+      tracks.audio?.detach();
+    }
+    if (videoRef.current && selectedTracks?.video) selectedTracks.video.attach(videoRef.current);
+    if (audioRef.current && selectedTracks?.audio) {
+      selectedTracks.audio.attach(audioRef.current);
+      audioRef.current.muted = !listening;
+      if (listening) void audioRef.current.play().catch(() => undefined);
+    }
+    setRemoteAudioAvailable(Boolean(selectedTracks?.audio));
+  }, [cameraMediaRevision, listening, selectedCameraIdentity]);
+
+  const commandOptions = useCallback(() => ({
+    reliable: true,
+    topic: "pawly-command",
+    destinationIdentities: selectedCameraIdentity ? [selectedCameraIdentity] : undefined,
+  }), [selectedCameraIdentity]);
+
+  const sendCommand = useCallback(async (command: Record<string, unknown>) => {
+    const room = roomRef.current;
+    if (!room || !connected) return;
+    await room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(command)), commandOptions());
+  }, [commandOptions, connected]);
+  const selectedDeviceId = cameras.find((camera) => camera.identity === selectedCameraIdentity)?.id ?? null;
 
   const refreshClips = useCallback(async () => {
     setClips(await listSavedClips(roomCode));
   }, [roomCode]);
 
   useEffect(() => { void refreshClips(); }, [refreshClips]);
+  useEffect(() => { void listSavedSounds(roomCode).then(setSavedSounds).catch(() => undefined); }, [roomCode]);
+  useEffect(() => {
+    if (!selectedCameraIdentity || !selectedDeviceId || !connected) return;
+    void fetch(`/api/devices/${selectedDeviceId}/target`, { cache: "no-store" })
+      .then(async (response) => response.ok ? response.json() as Promise<{ target?: { box?: DogBox } | null }> : null)
+      .then((data) => {
+        const box = data?.target?.box;
+        if (box && [box.x, box.y, box.width, box.height].every(Number.isFinite)) void sendCommand({ type: "set_dog_target", box });
+      })
+      .catch(() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem(`pawly-pet-target-${roomCode}-${selectedCameraIdentity}`) ?? "null") as DogBox | null;
+          if (saved) void sendCommand({ type: "set_dog_target", box: saved });
+        } catch { /* Auto detection remains available if calibration cannot be restored. */ }
+      });
+  }, [connected, roomCode, selectedCameraIdentity, selectedDeviceId, sendCommand]);
+  useEffect(() => {
+    if (!connected || !selectedCameraIdentity) return;
+    setZoom(1);
+    setZoomMode("checking");
+    setDogTrack(null);
+    setPetKind(null);
+    void sendCommand({ type: "request_status" });
+    void sendCommand({ type: "set_zoom", zoom: 1 });
+    void sendCommand({ type: "request_event_history" });
+  }, [connected, selectedCameraIdentity, sendCommand]);
   useEffect(() => {
     sessionSettingsRef.current = { sessionKind, targetMinutes };
   }, [sessionKind, targetMinutes]);
@@ -188,17 +288,28 @@ export function OwnerRoom({ roomCode }: Props) {
       });
       room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
         if (participantRole(participant) !== "camera") return;
-        if (track.kind === Track.Kind.Video && videoRef.current) track.attach(videoRef.current);
-        if (track.kind === Track.Kind.Audio && audioRef.current) {
-          audioRef.current.muted = true;
-          track.attach(audioRef.current);
-          audioRef.current.pause();
-          setRemoteAudioAvailable(true);
-          setCameraAudioStatus("on");
-          setListening(false);
-        }
+        const current = cameraTracksRef.current.get(participant.identity) ?? {};
+        if (track.kind === Track.Kind.Video) current.video = track;
+        if (track.kind === Track.Kind.Audio) current.audio = track;
+        cameraTracksRef.current.set(participant.identity, current);
+        setCameraMediaRevision((revision) => revision + 1);
+        const info = cameraInfo(participant);
+        setCameras((items) => items.some((item) => item.identity === info.identity) ? items.map((item) => item.identity === info.identity ? { ...item, ...info } : item) : [...items, info]);
+        setSelectedCameraIdentity((identity) => identity ?? participant.identity);
+        if (track.kind === Track.Kind.Audio) setCameraAudioStatus("on");
       });
-      room.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.kind === Track.Kind.Audio) { setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("off"); } track.detach(); });
+      room.on(RoomEvent.TrackUnsubscribed, (track, _publication, participant) => {
+        const current = cameraTracksRef.current.get(participant.identity);
+        if (current?.video === track) delete current.video;
+        if (current?.audio === track) delete current.audio;
+        if (track.kind === Track.Kind.Audio && participant.identity === selectedCameraIdentityRef.current) {
+          setRemoteAudioAvailable(false);
+          setListening(false);
+          setCameraAudioStatus("off");
+        }
+        track.detach();
+        setCameraMediaRevision((revision) => revision + 1);
+      });
       room.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
         if (participantRole(participant) !== "camera") return;
         if (topic === "pawly-event-history") {
@@ -234,20 +345,26 @@ export function OwnerRoom({ roomCode }: Props) {
           return;
         }
         if (topic === "pawly-dog-track") {
+          if (selectedCameraIdentityRef.current && participant?.identity !== selectedCameraIdentityRef.current) return;
           try {
-            const reading = JSON.parse(new TextDecoder().decode(payload)) as { visible?: boolean; confidence?: number; box?: DogBox | null; targetMode?: "auto" | "owner_guided" };
+            const reading = JSON.parse(new TextDecoder().decode(payload)) as { visible?: boolean; confidence?: number; box?: DogBox | null; targetMode?: "auto" | "owner_guided"; petKind?: PetKind | null };
             setDogTrack({
               visible: reading.visible === true,
               confidence: Number.isFinite(reading.confidence) ? reading.confidence ?? 0 : 0,
               box: reading.box ?? null,
               targetMode: reading.targetMode === "owner_guided" ? "owner_guided" : "auto",
             });
+            setPetKind(reading.petKind === "cat" ? "cat" : reading.petKind === "dog" ? "dog" : null);
           } catch { /* ignore malformed tracking data */ }
           return;
         }
         if (topic === "pawly-camera-status") {
           try {
-            const status = JSON.parse(new TextDecoder().decode(payload)) as { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number; enabled?: boolean };
+            const status = JSON.parse(new TextDecoder().decode(payload)) as CameraHealth & { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number; enabled?: boolean };
+            if (status.type === "health_status" && participant) {
+              setCameras((items) => items.map((item) => item.identity === participant.identity ? { ...item, health: status } : item));
+            }
+            if (selectedCameraIdentityRef.current && participant?.identity !== selectedCameraIdentityRef.current) return;
             if (status.type === "zoom_status") {
               setZoomMode(status.supported ? "camera" : "view");
               if (status.supported && Number.isFinite(status.zoom)) setZoom(status.zoom ?? 1);
@@ -256,6 +373,14 @@ export function OwnerRoom({ roomCode }: Props) {
             if (status.type === "audio_status") {
               setCameraAudioStatus(status.enabled ? "on" : "off");
               if (status.enabled) setRoomSoundRequest("idle");
+            }
+            if (status.type === "target_invalidated") {
+              setDogTrack((current) => current ? { ...current, targetMode: "auto" } : current);
+              setError("The camera moved, so Pawly cleared the saved pet selection. Re-select your pet after the view settles.");
+              if (participant && participant.identity === selectedCameraIdentityRef.current) {
+                const deviceId = cameraInfo(participant).id;
+                void fetch(`/api/devices/${deviceId}/target`, { method: "DELETE" }).catch(() => undefined);
+              }
             }
           } catch { /* ignore malformed camera status */ }
           return;
@@ -270,9 +395,15 @@ export function OwnerRoom({ roomCode }: Props) {
       });
       room.on(RoomEvent.ParticipantConnected, (participant) => {
         if (participantRole(participant) !== "camera") return;
+        const info = cameraInfo(participant);
+        setCameras((items) => items.some((item) => item.identity === info.identity) ? items : [...items, info]);
+        setSelectedCameraIdentity((identity) => identity ?? participant.identity);
         setConnected(true); setZoomMode("checking"); void requestSavedClips(); void requestEventHistory(); void requestCameraZoom();
       });
-      room.on(RoomEvent.ParticipantDisconnected, () => {
+      room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        cameraTracksRef.current.delete(participant.identity);
+        setCameras((items) => items.filter((item) => item.identity !== participant.identity));
+        setSelectedCameraIdentity((identity) => identity === participant.identity ? null : identity);
         const cameraStillOnline = [...room.remoteParticipants.values()].some((participant) => participantRole(participant) === "camera");
         setConnected(cameraStillOnline);
         if (!cameraStillOnline) {
@@ -285,22 +416,26 @@ export function OwnerRoom({ roomCode }: Props) {
         }
       });
       room.on(RoomEvent.Disconnected, () => { setConnected(false); setTalking(false); setRemoteAudioAvailable(false); setListening(false); setCameraAudioStatus("unknown"); setDogTrack(null); disposeEncryptionRef.current?.(); disposeEncryptionRef.current = null; });
+      room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+        if (participantRole(participant) !== "camera") return;
+        setCameras((items) => items.map((item) => item.identity === participant.identity ? { ...item, health: { ...(item.health ?? { camera: true, microphone: false }), connectionQuality: String(quality) } } : item));
+      });
       await room.connect(serverUrl, token);
       const cameraOnline = [...room.remoteParticipants.values()].some((participant) => participantRole(participant) === "camera");
       setConnected(cameraOnline);
+      const initialCameras = [...room.remoteParticipants.values()].filter((participant) => participantRole(participant) === "camera").map(cameraInfo);
+      setCameras(initialCameras);
+      setSelectedCameraIdentity((identity) => identity ?? initialCameras[0]?.identity ?? null);
       if (cameraOnline) { void requestSavedClips(); void requestEventHistory(); void requestCameraZoom(); }
       for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) {
         if (participantRole(participant) !== "camera") continue;
-        if (publication.track?.kind === Track.Kind.Video && videoRef.current) publication.track.attach(videoRef.current);
-        if (publication.track?.kind === Track.Kind.Audio && audioRef.current) {
-          audioRef.current.muted = true;
-          publication.track.attach(audioRef.current);
-          audioRef.current.pause();
-          setRemoteAudioAvailable(true);
-          setCameraAudioStatus("on");
-          setListening(false);
-        }
+        const current = cameraTracksRef.current.get(participant.identity) ?? {};
+        if (publication.track?.kind === Track.Kind.Video) current.video = publication.track;
+        if (publication.track?.kind === Track.Kind.Audio) current.audio = publication.track;
+        cameraTracksRef.current.set(participant.identity, current);
+        if (publication.track?.kind === Track.Kind.Audio) setCameraAudioStatus("on");
       }
+      setCameraMediaRevision((revision) => revision + 1);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not join room"); }
   }, [refreshClips, roomCode]);
 
@@ -389,12 +524,14 @@ export function OwnerRoom({ roomCode }: Props) {
     if (!room || !connected) return;
     if (talking) {
       await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+      await sendCommand({ type: "talk_target", enabled: false }).catch(() => undefined);
       setTalking(false);
       setTalkStatus("ready");
       return;
     }
     setTalkStatus("requesting");
     try {
+      await sendCommand({ type: "talk_target", enabled: true });
       await room.localParticipant.setMicrophoneEnabled(true, {
         echoCancellation: true,
         noiseSuppression: true,
@@ -409,12 +546,8 @@ export function OwnerRoom({ roomCode }: Props) {
   };
 
   const wakeIpadDisplay = async () => {
-    const room = roomRef.current;
-    if (!room || !connected) return;
-    await room.localParticipant.publishData(
-      new TextEncoder().encode(JSON.stringify({ type: "wake_display" })),
-      { reliable: true, topic: "pawly-command" },
-    );
+    if (!connected) return;
+    await sendCommand({ type: "wake_display" });
     setWakeSent(true);
     window.setTimeout(() => setWakeSent(false), 2500);
   };
@@ -424,10 +557,7 @@ export function OwnerRoom({ roomCode }: Props) {
     if (!room || endingMonitoring) return;
     setEndingMonitoring(true);
     try {
-      await room.localParticipant.publishData(
-        new TextEncoder().encode(JSON.stringify({ type: "stop_monitoring" })),
-        { reliable: true, topic: "pawly-command" },
-      );
+      await sendCommand({ type: "stop_monitoring" });
       setSummary(await requestSessionSummary(roomCode, events, startedAt, targetMinutes, sessionKind));
       await room.disconnect();
       setConnected(false);
@@ -445,15 +575,8 @@ export function OwnerRoom({ roomCode }: Props) {
     if (!room || !connected) return;
     setRoomSoundRequest("requesting");
     try {
-      const encoder = new TextEncoder();
-      await room.localParticipant.publishData(
-        encoder.encode(JSON.stringify({ type: "wake_display" })),
-        { reliable: true, topic: "pawly-command" },
-      );
-      await room.localParticipant.publishData(
-        encoder.encode(JSON.stringify({ type: "enable_audio" })),
-        { reliable: true, topic: "pawly-command" },
-      );
+      await sendCommand({ type: "wake_display" });
+      await sendCommand({ type: "enable_audio" });
       setRoomSoundRequest("sent");
     } catch {
       setRoomSoundRequest("idle");
@@ -461,26 +584,30 @@ export function OwnerRoom({ roomCode }: Props) {
     }
   };
 
-  const changeZoom = async (direction: -1 | 1) => {
+  const setCameraZoom = async (requestedZoom: number) => {
     const lower = zoomMode === "camera" ? zoomBounds.min : 1;
     const upper = zoomMode === "camera" ? zoomBounds.max : 3;
-    const nextZoom = Math.min(upper, Math.max(lower, Math.round((zoom + direction * 0.5) * 10) / 10));
+    const nextZoom = Math.min(upper, Math.max(lower, Math.round(requestedZoom * 10) / 10));
     setZoom(nextZoom);
-    const room = roomRef.current;
-    if (!room || !connected) return;
-    await room.localParticipant.publishData(
-      new TextEncoder().encode(JSON.stringify({ type: "set_zoom", zoom: nextZoom })),
-      { reliable: true, topic: "pawly-command" },
-    );
+    await sendCommand({ type: "set_zoom", zoom: nextZoom });
   };
 
   const sendDogTarget = async (box: DogBox | null) => {
-    const room = roomRef.current;
-    if (!room || !connected) return;
-    await room.localParticipant.publishData(
-      new TextEncoder().encode(JSON.stringify({ type: "set_dog_target", box })),
-      { reliable: true, topic: "pawly-command" },
-    );
+    if (!connected) return;
+    await sendCommand({ type: "set_dog_target", box });
+    if (selectedCameraIdentity) {
+      try {
+        if (box) localStorage.setItem(`pawly-pet-target-${roomCode}-${selectedCameraIdentity}`, JSON.stringify(box));
+        else localStorage.removeItem(`pawly-pet-target-${roomCode}-${selectedCameraIdentity}`);
+      } catch { /* Calibration still works for the current session. */ }
+    }
+    if (selectedDeviceId) {
+      void fetch(`/api/devices/${selectedDeviceId}/target`, box ? {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(box),
+      } : { method: "DELETE" }).catch(() => undefined);
+    }
     setDogTrack((current) => current ? { ...current, targetMode: box ? "owner_guided" : "auto" } : current);
   };
 
@@ -532,6 +659,104 @@ export function OwnerRoom({ roomCode }: Props) {
     await refreshClips();
   };
 
+  const togglePictureInPicture = async () => {
+    const video = videoRef.current as HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> };
+    if (!video) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if (video.requestPictureInPicture) await video.requestPictureInPicture();
+      else setError("Floating view is not supported in this browser.");
+    } catch {
+      await sendCommand({ type: "talk_target", enabled: false }).catch(() => undefined);
+      setError("This browser could not open floating view. Try Safari or Chrome outside an in-app browser.");
+    }
+  };
+
+  const flipCamera = async () => {
+    await sendCommand({ type: "flip_camera" });
+    if (selectedCameraIdentity) {
+      try { localStorage.removeItem(`pawly-pet-target-${roomCode}-${selectedCameraIdentity}`); } catch { /* no-op */ }
+    }
+    if (selectedDeviceId) void fetch(`/api/devices/${selectedDeviceId}/target`, { method: "DELETE" }).catch(() => undefined);
+    setDogTrack(null);
+    setZoom(1);
+    setZoomMode("checking");
+  };
+
+  const toggleTorch = async () => {
+    const selected = cameras.find((camera) => camera.identity === selectedCameraIdentity);
+    await sendCommand({ type: "set_torch", enabled: !selected?.health?.torchOn });
+  };
+
+  const toggleAmbient = async () => {
+    await sendCommand({ type: ambientPlaying ? "stop_ambient" : "play_ambient" });
+    setAmbientPlaying((current) => !current);
+  };
+
+  const recordSound = async (label: "No" | "Good job") => {
+    if (recordingSound) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const recorder = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        const sound: SavedSound = { id: crypto.randomUUID(), roomCode, label, createdAt: Date.now(), mimeType: blob.type, blob };
+        void saveSound(sound).then(() => listSavedSounds(roomCode)).then(setSavedSounds).catch(() => setError("The recording could not be saved on this device."));
+        stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+        setRecordingSound(null);
+      };
+      mediaRecorderRef.current = recorder;
+      setRecordingSound(label);
+      recorder.start();
+      window.setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 5_000);
+    } catch {
+      setError("Allow microphone access to record a sound button.");
+    }
+  };
+
+  const playSavedSound = async (sound: SavedSound) => {
+    const room = roomRef.current;
+    if (!room || !selectedCameraIdentity || soundBusy) return;
+    setSoundBusy(true);
+    try {
+      const extension = sound.mimeType.includes("mp4") ? "m4a" : "webm";
+      await room.localParticipant.sendFile(new File([sound.blob], `pawly-sound-${sound.id}.${extension}`, { type: sound.mimeType }), {
+        topic: "pawly-sound",
+        mimeType: sound.mimeType,
+        destinationIdentities: [selectedCameraIdentity],
+      });
+    } catch {
+      setError("The sound could not reach this camera.");
+    } finally {
+      window.setTimeout(() => setSoundBusy(false), 900);
+    }
+  };
+
+  const removeSound = async (id: string) => {
+    await deleteSound(id);
+    setSavedSounds(await listSavedSounds(roomCode));
+  };
+
+  const selectCamera = async (identity: string) => {
+    const room = roomRef.current;
+    if (talking && room && selectedCameraIdentity) {
+      await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+      await room.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify({ type: "talk_target", enabled: false })),
+        { reliable: true, topic: "pawly-command", destinationIdentities: [selectedCameraIdentity] },
+      ).catch(() => undefined);
+      setTalking(false);
+    }
+    setListening(false);
+    setSelectedCameraIdentity(identity);
+  };
+
   const customAwayWindow = sessionKind === "away_monitoring" && targetMinutes > 240;
   const maskedRoomCode = `${roomCode.slice(0, 4)}••••${roomCode.slice(-4)}`;
   const dogTrackingNeedsHelp = trackingAssistReady && (!dogTrack?.visible || dogTrack.confidence < 0.55);
@@ -539,11 +764,14 @@ export function OwnerRoom({ roomCode }: Props) {
   const dogAssistLabel = dogSelectionMode
     ? "Cancel selection"
     : dogTrack?.targetMode === "owner_guided"
-      ? "Re-select your dog"
+      ? "Re-select your pet"
       : dogTrack?.visible
-        ? "Not sure — select your dog"
-        : "Dog not found — help AI";
+        ? "Not sure — select your pet"
+        : "Pet not found — help AI";
   const hasArrivalActivity = Boolean(arrivalSummary && arrivalSummary.activeEvents > 0);
+  const selectedCamera = cameras.find((camera) => camera.identity === selectedCameraIdentity) ?? null;
+  const zoomMinimum = zoomMode === "camera" ? zoomBounds.min : 1;
+  const zoomMaximum = zoomMode === "camera" ? zoomBounds.max : 3;
 
   return <main className="dashboard-page">
     <nav className="dashboard-nav">
@@ -560,14 +788,20 @@ export function OwnerRoom({ roomCode }: Props) {
     </nav>
     <div className="dashboard-grid">
       <section className="live-panel">
-        <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{connected ? "Camera online" : "Waiting for camera"}</span></div><span className="private-room-label">End-to-end encrypted</span></div>
+        <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{selectedCamera ? `${selectedCamera.name} online` : connected ? "Camera online" : "Waiting for camera"}</span></div><span className="private-room-label">End-to-end encrypted</span></div>
+        {cameras.length > 0 && <div className="camera-device-tabs" aria-label="Camera devices">
+          {cameras.map((camera) => <button key={camera.identity} className={camera.identity === selectedCameraIdentity ? "selected" : ""} onClick={() => void selectCamera(camera.identity)}>
+            <span className="status-dot live" /><strong>{camera.name}</strong><small>{camera.health?.connectionQuality ? camera.health.connectionQuality.replace(/^CONNECTION_QUALITY_/, "").toLowerCase() : "online"}</small>
+          </button>)}
+          <Link href="/setup" className="add-camera-tab">+ Add camera</Link>
+        </div>}
         <div className="owner-video">
           <video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} />
           <audio ref={audioRef} playsInline />
           {connected && dogTrack?.visible && dogTrack.box && (
             <div className="dog-track-layer" style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }}>
               <div className={`dog-detection-box ${dogTrack.targetMode === "owner_guided" ? "owner-guided" : ""}`} style={coverBoxStyle(dogTrack.box, videoRef.current)}>
-                <span>{dogTrack.targetMode === "owner_guided" ? "Your dog" : "Dog"} · {Math.round(dogTrack.confidence * 100)}%</span>
+                <span>{dogTrack.targetMode === "owner_guided" ? "Your pet" : petKind === "cat" ? "Cat" : "Dog"} · {Math.round(dogTrack.confidence * 100)}%</span>
               </div>
             </div>
           )}
@@ -579,7 +813,7 @@ export function OwnerRoom({ roomCode }: Props) {
             onPointerCancel={() => setDogSelection(null)}
             aria-hidden={!dogSelectionMode}
           >
-            {dogSelectionMode && <div className="dog-selection-instruction">Drag a box around your dog</div>}
+            {dogSelectionMode && <div className="dog-selection-instruction">Drag a box around your pet</div>}
             {dogSelection && <div className="dog-selection-draft" style={{
               left: Math.min(dogSelection.startX, dogSelection.endX),
               top: Math.min(dogSelection.startY, dogSelection.endY),
@@ -594,8 +828,13 @@ export function OwnerRoom({ roomCode }: Props) {
             </button>
             {dogTrack?.targetMode === "owner_guided" && <button className="target-reset" onClick={() => { setDogSelectionMode(false); setDogSelection(null); void sendDogTarget(null); }}>Use auto detection</button>}
           </div>}
-          {connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Zoom out" onClick={() => void changeZoom(-1)} disabled={zoom <= (zoomMode === "camera" ? zoomBounds.min : 1)}>−</button><strong>{zoom.toFixed(1)}×</strong><button aria-label="Zoom in" onClick={() => void changeZoom(1)} disabled={zoom >= (zoomMode === "camera" ? zoomBounds.max : 3)}>+</button></div></div>}
-          {connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} aria-pressed={listening} onClick={() => void toggleListening()}>{listening ? "♪ Room sound · On" : "♪ Room sound · Off"}</button> : cameraAudioStatus === "off" ? <button className={`room-audio-status room-audio-action ${roomSoundRequest === "sent" ? "sent" : ""}`} onClick={() => void requestRoomSound()} disabled={roomSoundRequest === "requesting"}>{roomSoundRequest === "requesting" ? "Requesting room sound…" : roomSoundRequest === "sent" ? "Allow sound on the camera device" : "Room audio is off · Enable"}</button> : <span className="room-audio-status">Checking room audio…</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your dog"}</button></div>}
+          {connected && <div className="camera-quick-controls">
+            <button onClick={() => void flipCamera()}>↻ Flip</button>
+            <button onClick={() => void togglePictureInPicture()}>▣ Float</button>
+            {selectedCamera?.health?.torchSupported && <button className={selectedCamera.health.torchOn ? "active" : ""} onClick={() => void toggleTorch()}>✦ Light</button>}
+          </div>}
+          {connected && <div className="zoom-control"><span>{zoomMode === "camera" ? "Camera zoom" : zoomMode === "view" ? "View zoom" : "Checking zoom"}</span><div><button aria-label="Reset zoom" onClick={() => void setCameraZoom(1)}>1×</button><input aria-label="Camera zoom" type="range" min={zoomMinimum} max={zoomMaximum} step={zoomMode === "camera" ? zoomBounds.max > 4 ? 0.5 : 0.1 : 0.1} value={zoom} onChange={(event) => void setCameraZoom(Number(event.target.value))} disabled={zoomMode === "checking"} /><strong>{zoom.toFixed(1)}×</strong></div></div>}
+          {connected && <div className="voice-control-stack">{remoteAudioAvailable ? <button className={`listen-room-button ${listening ? "listening" : ""}`} aria-pressed={listening} onClick={() => void toggleListening()}>{listening ? "♪ Room sound · On" : "♪ Room sound · Off"}</button> : cameraAudioStatus === "off" ? <button className={`room-audio-status room-audio-action ${roomSoundRequest === "sent" ? "sent" : ""}`} onClick={() => void requestRoomSound()} disabled={roomSoundRequest === "requesting"}>{roomSoundRequest === "requesting" ? "Requesting room sound…" : roomSoundRequest === "sent" ? "Allow sound on the camera device" : "Room audio is off · Enable"}</button> : <span className="room-audio-status">Checking room audio…</span>}<button className={`talk-room-button ${talking ? "talking" : ""}`} onClick={() => void toggleTalking()} disabled={talkStatus === "requesting"}>{talking ? "● Talking · tap to stop" : talkStatus === "requesting" ? "Opening microphone…" : talkStatus === "blocked" ? "Retry microphone" : "◉ Talk to your pet"}</button></div>}
           <div className={`current-state ${state}`}><span /><div><small>Current observation</small><strong>{label}</strong><em>{sublabel}</em></div></div>
         </div>
         {error && <p className="error-banner">{error}</p>}
@@ -626,7 +865,17 @@ export function OwnerRoom({ roomCode }: Props) {
             <p>{connected ? "No new activity since you opened this page." : "Connect the camera to begin monitoring."}</p>
           )}
         </section>
-        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><div><strong>No activity detected yet</strong><p>Pawly will show dog movement, sound, and visibility changes here. Camera movement is ignored.</p></div></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Dog movement score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
+        <section className="soundboard-card">
+          <div className="soundboard-heading"><div><span className="eyebrow">Pet soundboard</span><strong>Familiar sounds, one tap away</strong></div><span>{selectedCamera?.name ?? "Choose a camera"}</span></div>
+          <div className="soundboard-actions">
+            {savedSounds.map((sound) => <div className="sound-button-wrap" key={sound.id}><button disabled={!connected || soundBusy} onClick={() => void playSavedSound(sound)}>▶ {sound.label}</button><button className="sound-delete" aria-label={`Delete ${sound.label}`} onClick={() => void removeSound(sound.id)}>×</button></div>)}
+            {!savedSounds.some((sound) => sound.label === "No") && <button className={recordingSound === "No" ? "recording" : ""} onClick={() => void recordSound("No")}>{recordingSound === "No" ? "■ Stop & save" : "● Record “No”"}</button>}
+            {!savedSounds.some((sound) => sound.label === "Good job") && <button className={recordingSound === "Good job" ? "recording" : ""} onClick={() => void recordSound("Good job")}>{recordingSound === "Good job" ? "■ Stop & save" : "● Record praise"}</button>}
+            <button className={ambientPlaying ? "active" : ""} disabled={!connected} onClick={() => void toggleAmbient()}>{ambientPlaying ? "■ Stop quiet sound" : "♪ Play quiet ambient"}</button>
+          </div>
+          <small>Custom voice buttons stay on this owner device and are sent only to the selected camera.</small>
+        </section>
+        <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><div><strong>No activity detected yet</strong><p>Pawly will show pet movement, sound, and visibility changes here. Camera movement is ignored.</p></div></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {event.deviceName ? `${event.deviceName} · ` : ""}{Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Pet movement score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>
         <section className="saved-clips-section"><div className="saved-clips-heading"><div><strong>Recent activity replay</strong><span>12-second detected moments · this device</span></div><b>{clips.length}</b></div>{clipReceiveProgress != null && <div className="clip-progress"><span style={{ width: `${Math.round(clipReceiveProgress * 100)}%` }} /></div>}<div className="saved-clips-list">{clips.length === 0 ? <p>Movement or sustained sound can automatically save a short replay here.</p> : clips.slice(0, 4).map((clip) => <SavedClipCard key={clip.id} clip={clip} onDelete={(id) => void removeClip(id)} />)}</div></section>
         <div className="ai-card"><div><span className="ai-spark">✦</span><div><strong>AI recap is included</strong><p>“View recap so far” summarizes timestamped events without stopping monitoring. Video clips and the live feed are never sent to the model.</p></div></div></div>
       </aside>
@@ -641,8 +890,19 @@ export function OwnerRoom({ roomCode }: Props) {
 
           <section className="settings-card">
             <div className="settings-card-heading"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><strong>Camera device</strong></div><span>{connected ? "Online" : "Offline"}</span></div>
-            <p>{connected ? "Your camera is connected to this private room." : "Open camera mode on your other device to reconnect."}</p>
+            <p>{connected ? `${selectedCamera?.name ?? "Your camera"} is connected to this private room.` : "Open camera mode on your other device to reconnect."}</p>
             <button className="settings-action" type="button" onClick={() => void wakeIpadDisplay()} disabled={!connected}>{wakeSent ? "Display awake for 60 seconds" : "Wake camera display"}</button>
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-heading"><strong>Camera health</strong><span>{selectedCamera?.health?.connectionQuality?.replace(/^CONNECTION_QUALITY_/, "") ?? (connected ? "Checking" : "Offline")}</span></div>
+            <div className="camera-health-grid">
+              <span><b>Video</b>{selectedCamera?.health?.camera ? `${selectedCamera.health.width ?? "—"}×${selectedCamera.health.height ?? "—"}` : "Waiting"}</span>
+              <span><b>Room mic</b>{selectedCamera?.health?.microphone ? "Working" : "Off"}</span>
+              <span><b>Pet AI</b>{selectedCamera?.health?.detector ?? "Checking"}</span>
+              <span><b>Lens</b>{selectedCamera?.health?.facingMode === "user" ? "Front" : "Back"}</span>
+            </div>
+            <button className="settings-action" type="button" onClick={() => void sendCommand({ type: "request_status" })} disabled={!connected}>Refresh device check</button>
           </section>
 
           <section className="settings-card">
@@ -654,7 +914,7 @@ export function OwnerRoom({ roomCode }: Props) {
 
           <section className="settings-card">
             <div className="settings-card-heading"><strong>Activity notifications</strong><span>{notificationPermission === "granted" ? "On" : notificationPermission === "denied" ? "Blocked" : notificationPermission === "unsupported" ? "Unavailable" : "Off"}</span></div>
-            <p>Get a browser notification for meaningful movement, sound, or when your dog leaves view.</p>
+            <p>Get a browser notification for meaningful movement, sound, or when your pet leaves view.</p>
             {notificationPermission === "default" && <button className="settings-action" type="button" onClick={() => void requestNotifications()}>Enable notifications</button>}
             {notificationPermission === "denied" && <p className="settings-permission-note">Notifications are blocked. Open this site’s browser permissions to allow them.</p>}
           </section>
@@ -674,9 +934,9 @@ export function OwnerRoom({ roomCode }: Props) {
       </div>
     )}
     {summary && (
-      <div className="modal-backdrop" onClick={() => setSummary(null)}>
-        <section className="summary-modal" onClick={(event) => event.stopPropagation()}>
-          <button className="modal-close" onClick={() => setSummary(null)}>×</button>
+      <div className={`modal-backdrop ${recapExpanded ? "recap-expanded" : ""}`} onClick={() => { setSummary(null); setRecapExpanded(false); }}>
+        <section className={`summary-modal ${recapExpanded ? "expanded" : ""}`} onClick={(event) => event.stopPropagation()}>
+          <div className="recap-window-actions"><button aria-label={recapExpanded ? "Restore recap size" : "Expand recap"} onClick={() => setRecapExpanded((current) => !current)}>{recapExpanded ? "↙" : "↗"}</button><button aria-label="Close recap" onClick={() => { setSummary(null); setRecapExpanded(false); }}>×</button></div>
           <span className="eyebrow">Observation review · {summary.source === "openai" ? "AI assisted" : "on-device rules"}</span>
           <h2>{summary.headline}</h2>
           <p className="behavior-summary">{summary.behaviorSummary}</p>
