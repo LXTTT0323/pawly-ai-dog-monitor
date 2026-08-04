@@ -1,6 +1,7 @@
-import Image from "next/image";
 import Link from "next/link";
 import { Brand } from "@/components/brand";
+
+export const dynamic = "force-dynamic";
 
 export default function Home() {
   return (
@@ -32,7 +33,7 @@ export default function Home() {
           <div className="device-card outing-card">
             <div className="device-top"><span>Joey&apos;s room</span><span className="live-pill">● AI WATCHING</span></div>
             <div className="camera-scene">
-              <Image className="hero-puppy-art" src="/pawly-german-shepherd-room.png" alt="A German Shepherd puppy resting calmly on a rug" fill sizes="(max-width: 600px) 90vw, 490px" priority />
+              <img className="hero-puppy-art" src="/pawly-german-shepherd-room.png" alt="A German Shepherd puppy resting calmly on a rug" width="1024" height="1024" fetchPriority="high" />
               <div className="camera-scene-shade" />
               <div className="calm-label"><span>●</span><div><strong>Dog visible</strong><small>92% confidence</small></div></div>
               <div className="scene-sound">♪ Sound on</div>
