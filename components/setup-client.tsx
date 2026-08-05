@@ -168,16 +168,16 @@ export function SetupClient({ user }: { user: PawlyUser }) {
             <div className="setup-step">
               <span>1</span>
               <div>
-                <h2>Pair a camera device</h2>
-                <p>Create a one-time link, then open it on the iPad, phone, or computer you want to use as the camera. It expires in five minutes and works once.</p>
-                <button className="button button-primary" type="button" onClick={() => void createPairing()}>Create private pairing link</button>
+                <h2>{devices.length ? "Add another camera device" : "Pair a camera device"}</h2>
+                <p>Create a private link, then open it on any iPad, phone, or computer you want to use as a camera. Each link lasts 15 minutes and approves one device.</p>
+                <button className="button button-primary" type="button" onClick={() => void createPairing()}>{devices.length ? "Create link for another camera" : "Create private pairing link"}</button>
                 {pairing && <div className="pairing-card" role="status">
                   <div><strong>Pairing link ready</strong><span>Expires {new Date(pairing.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>
                   <div className="button-row">
                     <button className="button button-dark" onClick={() => void copyPairing()}>{copied ? "Link copied" : "Copy link"}</button>
-                    <a className="button button-ghost" href={pairing.url}>Pair this device</a>
+                    <a className="button button-ghost" href={pairing.url}>Open pairing page</a>
                   </div>
-                  <small>Send this only to the camera device. Opening it immediately consumes the link.</small>
+                  <small>Copying or opening the link does not consume it. The camera device must tap “Approve & pair” before the link is used.</small>
                 </div>}
               </div>
             </div>
@@ -198,14 +198,14 @@ export function SetupClient({ user }: { user: PawlyUser }) {
             <div className="setup-step">
               <span>3</span>
               <div className="paired-devices-section">
-                <h2>Approved camera devices</h2>
+                <h2>Camera devices ({devices.length})</h2>
                 {devices.length === 0 ? <p>No camera is paired yet.</p> : <div className="device-list">
                   {devices.map((device) => <div className="device-row" key={device.id}>
                     <div><strong>{device.name}</strong><span>Last connected {new Date(device.lastSeenAt).toLocaleString()}</span></div>
                     <button type="button" onClick={() => void revoke(device.id)} disabled={revoking === device.id}>{revoking === device.id ? "Removing…" : "Remove"}</button>
                   </div>)}
                 </div>}
-                <p className="privacy-footnote">Removing a device disconnects it and prevents it from reconnecting. Pair it again only if you trust it.</p>
+                <p className="privacy-footnote">You can add multiple camera devices with separate pairing links. Removing one disconnects only that device and prevents it from reconnecting.</p>
               </div>
             </div>
           </>}

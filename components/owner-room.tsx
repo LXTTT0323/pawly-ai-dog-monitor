@@ -776,25 +776,32 @@ export function OwnerRoom({ roomCode }: Props) {
   return <main className="dashboard-page">
     <nav className="dashboard-nav">
       <Brand />
-      <button
-        className="room-menu-button"
-        type="button"
-        aria-label="Open room and device settings"
-        aria-expanded={settingsOpen}
-        onClick={() => setSettingsOpen(true)}
-      >
-        <span aria-hidden="true">⚙</span>
-      </button>
+      <div className="dashboard-nav-actions">
+        <Link className="camera-manager-link" href="/setup">Cameras</Link>
+        <button
+          className="room-menu-button"
+          type="button"
+          aria-label="Open room and device settings"
+          aria-expanded={settingsOpen}
+          onClick={() => setSettingsOpen(true)}
+        >
+          <span aria-hidden="true">⚙</span>
+        </button>
+      </div>
     </nav>
     <div className="dashboard-grid">
       <section className="live-panel">
         <div className="panel-title"><div><span className={`status-dot ${connected ? "live" : "connecting"}`} /><span>{selectedCamera ? `${selectedCamera.name} online` : connected ? "Camera online" : "Waiting for camera"}</span></div><span className="private-room-label">End-to-end encrypted</span></div>
-        {cameras.length > 0 && <div className="camera-device-tabs" aria-label="Camera devices">
-          {cameras.map((camera) => <button key={camera.identity} className={camera.identity === selectedCameraIdentity ? "selected" : ""} onClick={() => void selectCamera(camera.identity)}>
-            <span className="status-dot live" /><strong>{camera.name}</strong><small>{camera.health?.connectionQuality ? camera.health.connectionQuality.replace(/^CONNECTION_QUALITY_/, "").toLowerCase() : "online"}</small>
-          </button>)}
-          <Link href="/setup" className="add-camera-tab">+ Add camera</Link>
-        </div>}
+        <div className="camera-tabs-wrap">
+          <div className="camera-tabs-heading"><span>Camera devices</span><Link href="/setup">Manage cameras</Link></div>
+          <div className="camera-device-tabs" aria-label="Camera devices">
+            {cameras.map((camera) => <button key={camera.identity} className={camera.identity === selectedCameraIdentity ? "selected" : ""} onClick={() => void selectCamera(camera.identity)}>
+              <span className="status-dot live" /><strong>{camera.name}</strong><small>{camera.health?.connectionQuality ? camera.health.connectionQuality.replace(/^CONNECTION_QUALITY_/, "").toLowerCase() : "online"}</small>
+            </button>)}
+            {cameras.length === 0 && <span className="camera-offline-chip"><span className="status-dot connecting" />No camera online</span>}
+            <Link href="/setup" className="add-camera-tab">+ Add camera</Link>
+          </div>
+        </div>
         <div className="owner-video">
           <video ref={videoRef} autoPlay playsInline style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }} />
           <audio ref={audioRef} playsInline />

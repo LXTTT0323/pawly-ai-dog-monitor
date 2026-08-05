@@ -115,22 +115,24 @@ export async function createOwnedRoom(ownerEmail: string, ownerName: string): Pr
 
 export async function createPairingToken(room: RoomRecord) {
   const rawToken = randomSecret();
+  const now = Date.now();
   const record: PairingRecord = {
     id: crypto.randomUUID(),
     roomId: room.id,
     tokenHash: await hashToken(rawToken),
-    expiresAt: Date.now() + 5 * 60 * 1000,
+    expiresAt: now + 15 * 60 * 1000,
     usedAt: null,
-    createdAt: Date.now(),
+    createdAt: now,
   };
   const db = await getDatabase();
   if (!db) {
-    for (const pairing of memory.pawlySecurityMemory!.pairings.values()) {
-      if (pairing.roomId === room.id && !pairing.usedAt) pairing.usedAt = Date.now();
+    for (const [id, pairing] of memory.pawlySecurityMemory!.pairings.entries()) {
+      if (pairing.roomId === room.id && (pairing.usedAt !== null || pairing.expiresAt <= now)) {
+        memory.pawlySecurityMemory!.pairings.delete(id);
+      }
     }
     memory.pawlySecurityMemory!.pairings.set(record.id, record);
   } else {
-    await db.prepare("UPDATE pairing_tokens SET used_at = ? WHERE room_id = ? AND used_at IS NULL").bind(Date.now(), room.id).run();
     await db.prepare("INSERT INTO pairing_tokens (id, room_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)")
       .bind(record.id, room.id, record.tokenHash, record.expiresAt, record.createdAt).run();
   }
