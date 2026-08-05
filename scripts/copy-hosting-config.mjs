@@ -18,6 +18,17 @@ const workerEntryPath = path.join(serverDirectory, "index.js");
 const vinextEntryPath = path.join(serverDirectory, "app.js");
 const serverChunksDirectory = path.join(serverDirectory, "_next/static");
 const ssrEntryPath = path.join(serverDirectory, "ssr/index.js");
+const liveKitWorkerSourcePath = path.resolve(
+  "node_modules/livekit-client/dist/livekit-client.e2ee.worker.js",
+);
+const liveKitWorkerTargetPath = path.resolve(
+  "dist/client/livekit-e2ee-worker.js",
+);
+
+// Preserve LiveKit's worker-ready build as a static same-origin asset. Passing
+// the worker source through the app bundler can incorrectly optimize browser
+// globals such as `window` inside a Web Worker.
+await copyFile(liveKitWorkerSourcePath, liveKitWorkerTargetPath);
 
 // vinext currently emits a bare async function as its default Worker export.
 // Cloudflare's current runtime treats that export as a WorkerEntrypoint class,
