@@ -6,7 +6,10 @@ export async function createEncryptedRoom(e2eeKey: string, options: ConstructorP
   }
   const keyProvider = new ExternalE2EEKeyProvider();
   await keyProvider.setKey(e2eeKey);
-  const worker = new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), { type: "module" });
+  // Keep the E2EE worker at a stable public URL. vinext's server bundle can
+  // otherwise preserve import.meta.url as a file:// URL, which browsers cannot
+  // load from the production https:// origin.
+  const worker = new Worker("/livekit-client.e2ee.worker.mjs", { type: "module" });
   return {
     room: new Room({ ...options, e2ee: { keyProvider, worker } }),
     disposeEncryption: () => worker.terminate(),
