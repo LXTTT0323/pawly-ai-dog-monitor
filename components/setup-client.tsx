@@ -145,17 +145,20 @@ export function SetupClient({ user }: { user: PawlyUser }) {
 
           {status === "ready" && room && <>
             <div className="pet-profile-card">
-              <div>
+              <div className="pet-profile-heading">
                 <span className="eyebrow">Your pets</span>
-                <h2>{pets.length ? pets.map((pet) => pet.name).join(" & ") : "Tell Pawly who to watch"}</h2>
+                <h2>{pets.length ? "Pawly knows who to watch" : "Who should Pawly watch?"}</h2>
                 <p>{pets.length ? "Pawly will use species-aware detection and wording in your live room." : "Add a dog or cat now. You can add more pets later."}</p>
               </div>
+              {pets.length > 0 && <div className="pet-profile-list" aria-label="Saved pets">
+                {pets.map((pet) => <span key={pet.id}><b aria-hidden="true">{pet.species === "cat" ? "◉" : "●"}</b><strong>{pet.name}</strong><small>{pet.species}</small></span>)}
+              </div>}
               <div className="pet-profile-form">
                 <input aria-label="Pet name" placeholder="Pet name" value={petName} onChange={(event) => setPetName(event.target.value)} maxLength={40} />
-                <select aria-label="Pet species" value={petSpecies} onChange={(event) => setPetSpecies(event.target.value === "cat" ? "cat" : "dog")}>
-                  <option value="dog">Dog</option>
-                  <option value="cat">Cat</option>
-                </select>
+                <div className="pet-species-toggle" role="group" aria-label="Pet species">
+                  <button type="button" className={petSpecies === "dog" ? "selected" : ""} aria-pressed={petSpecies === "dog"} onClick={() => setPetSpecies("dog")}>Dog</button>
+                  <button type="button" className={petSpecies === "cat" ? "selected" : ""} aria-pressed={petSpecies === "cat"} onClick={() => setPetSpecies("cat")}>Cat</button>
+                </div>
                 <button type="button" onClick={() => void savePet()} disabled={!petName.trim() || savingPet}>{savingPet ? "Saving…" : "Add pet"}</button>
               </div>
             </div>
