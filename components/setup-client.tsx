@@ -33,6 +33,8 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   const [copied, setCopied] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [pets, setPets] = useState<PetProfile[]>([]);
+  const [selectedPetId, setSelectedPetId] = useState<string | null>(null);
+  const [petFormMode, setPetFormMode] = useState<"add" | "edit">("add");
   const [petName, setPetName] = useState("");
   const [petSpecies, setPetSpecies] = useState<"dog" | "cat">("dog");
   const [savingPet, setSavingPet] = useState(false);
@@ -53,7 +55,15 @@ export function SetupClient({ user }: { user: PawlyUser }) {
       const profileResponse = await fetch("/api/profile", { cache: "no-store" });
       if (profileResponse.ok) {
         const profile = await profileResponse.json() as { pets?: PetProfile[] };
-        setPets(profile.pets ?? []);
+        const savedPets = profile.pets ?? [];
+        setPets(savedPets);
+        const selectedPet = savedPets.find((pet) => pet.isPrimary) ?? savedPets[0];
+        if (selectedPet) {
+          setSelectedPetId(selectedPet.id);
+          setPetFormMode("edit");
+          setPetName(selectedPet.name);
+          setPetSpecies(selectedPet.species);
+        }
       }
       setStatus("ready");
     } catch (cause) {
@@ -95,6 +105,20 @@ export function SetupClient({ user }: { user: PawlyUser }) {
     setRevoking(null);
   }
 
+  function selectPet(pet: PetProfile) {
+    setSelectedPetId(pet.id);
+    setPetFormMode("edit");
+    setPetName(pet.name);
+    setPetSpecies(pet.species);
+  }
+
+  function beginAddingPet() {
+    setSelectedPetId(null);
+    setPetFormMode("add");
+    setPetName("");
+    setPetSpecies("dog");
+  }
+
   async function savePet() {
     if (!petName.trim()) return;
     setSavingPet(true);
@@ -103,14 +127,41 @@ export function SetupClient({ user }: { user: PawlyUser }) {
       const response = await fetch("/api/profile", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: petName, species: petSpecies }),
+        body: JSON.stringify({
+          id: petFormMode === "edit" ? selectedPetId : undefined,
+          name: petName,
+          species: petSpecies,
+          ...(petFormMode === "add" && pets.length === 0 ? { isPrimary: true } : {}),
+        }),
       });
-      const data = await response.json() as { pets?: PetProfile[]; error?: string };
+      const data = await response.json() as { pet?: PetProfile; pets?: PetProfile[]; error?: string };
       if (!response.ok) throw new Error(data.error ?? "Could not save your pet");
-      setPets(data.pets ?? []);
-      setPetName("");
+      const savedPets = data.pets ?? [];
+      setPets(savedPets);
+      const savedPet = data.pet ?? savedPets.find((pet) => pet.id === selectedPetId);
+      if (savedPet) selectPet(savedPet);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save your pet");
+    } finally {
+      setSavingPet(false);
+    }
+  }
+
+  async function usePetForMonitoring(pet: PetProfile) {
+    setSavingPet(true);
+    setError("");
+    try {
+      const response = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: pet.id, name: pet.name, species: pet.species, isPrimary: true }),
+      });
+      const data = await response.json() as { pet?: PetProfile; pets?: PetProfile[]; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Could not select this pet");
+      setPets(data.pets ?? []);
+      if (data.pet) selectPet({ ...data.pet, isPrimary: true });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not select this pet");
     } finally {
       setSavingPet(false);
     }
@@ -146,20 +197,42 @@ export function SetupClient({ user }: { user: PawlyUser }) {
           {status === "ready" && room && <>
             <div className="pet-profile-card">
               <div className="pet-profile-heading">
-                <span className="eyebrow">Your pets</span>
-                <h2>{pets.length ? "Pawly knows who to watch" : "Who should Pawly watch?"}</h2>
-                <p>{pets.length ? "Pawly will use species-aware detection and wording in your live room." : "Add a dog or cat now. You can add more pets later."}</p>
+                <div>
+                  <span className="eyebrow">Your pets</span>
+                  <h2>{pets.length ? "Choose who Pawly is watching" : "Who should Pawly watch?"}</h2>
+                  <p>{pets.length ? "Select a saved pet to edit it or make it the current monitoring profile." : "Add a dog or cat now. You can add more pets later."}</p>
+                </div>
+                {pets.length > 0 && <button className="pet-add-link" type="button" onClick={beginAddingPet}>+ Add pet</button>}
               </div>
               {pets.length > 0 && <div className="pet-profile-list" aria-label="Saved pets">
-                {pets.map((pet) => <span key={pet.id}><b aria-hidden="true">{pet.species === "cat" ? "◉" : "●"}</b><strong>{pet.name}</strong><small>{pet.species}</small></span>)}
+                {pets.map((pet) => <button type="button" className={`${selectedPetId === pet.id ? "selected" : ""} ${pet.isPrimary ? "primary" : ""}`} key={pet.id} onClick={() => selectPet(pet)}>
+                  <b aria-hidden="true">{pet.species === "cat" ? "◉" : "●"}</b>
+                  <strong>{pet.name}</strong>
+                  <small>{pet.species}{pet.isPrimary ? " · current" : ""}</small>
+                </button>)}
               </div>}
-              <div className="pet-profile-form">
-                <input aria-label="Pet name" placeholder="Pet name" value={petName} onChange={(event) => setPetName(event.target.value)} maxLength={40} />
-                <div className="pet-species-toggle" role="group" aria-label="Pet species">
-                  <button type="button" className={petSpecies === "dog" ? "selected" : ""} aria-pressed={petSpecies === "dog"} onClick={() => setPetSpecies("dog")}>Dog</button>
-                  <button type="button" className={petSpecies === "cat" ? "selected" : ""} aria-pressed={petSpecies === "cat"} onClick={() => setPetSpecies("cat")}>Cat</button>
+              <div className="pet-profile-editor">
+                <div className="pet-editor-heading">
+                  <strong>{petFormMode === "add" ? "Add a new pet" : `Edit ${pets.find((pet) => pet.id === selectedPetId)?.name ?? "pet"}`}</strong>
+                  {petFormMode === "edit" && pets.find((pet) => pet.id === selectedPetId)?.isPrimary && <span>Current monitoring profile</span>}
                 </div>
-                <button type="button" onClick={() => void savePet()} disabled={!petName.trim() || savingPet}>{savingPet ? "Saving…" : "Add pet"}</button>
+                <div className="pet-profile-form">
+                  <label><span>Name</span><input aria-label="Pet name" placeholder="Pet name" value={petName} onChange={(event) => setPetName(event.target.value)} maxLength={40} /></label>
+                  <div className="pet-type-field"><span>Type</span><div className="pet-species-toggle" role="group" aria-label="Pet species">
+                    <button type="button" className={petSpecies === "dog" ? "selected" : ""} aria-pressed={petSpecies === "dog"} onClick={() => setPetSpecies("dog")}>Dog</button>
+                    <button type="button" className={petSpecies === "cat" ? "selected" : ""} aria-pressed={petSpecies === "cat"} onClick={() => setPetSpecies("cat")}>Cat</button>
+                  </div></div>
+                </div>
+                <div className="pet-editor-actions">
+                  <button className="pet-save-button" type="button" onClick={() => void savePet()} disabled={!petName.trim() || savingPet}>{savingPet ? "Saving…" : petFormMode === "add" ? "Add pet" : "Save changes"}</button>
+                  {petFormMode === "edit" && (() => {
+                    const selectedPet = pets.find((pet) => pet.id === selectedPetId);
+                    return selectedPet && !selectedPet.isPrimary
+                      ? <button className="pet-use-button" type="button" onClick={() => void usePetForMonitoring(selectedPet)} disabled={savingPet}>Use for monitoring</button>
+                      : null;
+                  })()}
+                  {petFormMode === "add" && pets.length > 0 && <button className="pet-cancel-button" type="button" onClick={() => selectPet(pets.find((pet) => pet.isPrimary) ?? pets[0])}>Cancel</button>}
+                </div>
               </div>
             </div>
 

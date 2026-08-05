@@ -85,7 +85,7 @@ export async function listPets(ownerEmail: string): Promise<PetProfile[]> {
   return (rows.results ?? []).map(mapPet);
 }
 
-export async function createPet(ownerEmail: string, name: string, species: PetSpecies): Promise<PetProfile> {
+export async function createPet(ownerEmail: string, name: string, species: PetSpecies, isPrimary = false): Promise<PetProfile> {
   const now = Date.now();
   const existing = await listPets(ownerEmail);
   const pet: PetProfile = {
@@ -93,16 +93,27 @@ export async function createPet(ownerEmail: string, name: string, species: PetSp
     ownerEmail,
     name: name.trim().slice(0, 40) || "My pet",
     species,
-    isPrimary: existing.length === 0,
+    isPrimary: existing.length === 0 || isPrimary,
     createdAt: now,
     updatedAt: now,
   };
   const db = await getDatabase();
-  if (!db) memory.pawlyProfileMemory!.pets.set(pet.id, pet);
-  else await db.prepare(`
-    INSERT INTO pets (id, owner_email, name, species, is_primary, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(pet.id, ownerEmail, pet.name, pet.species, pet.isPrimary ? 1 : 0, now, now).run();
+  if (!db) {
+    if (pet.isPrimary) {
+      for (const savedPet of memory.pawlyProfileMemory!.pets.values()) {
+        if (savedPet.ownerEmail === ownerEmail) savedPet.isPrimary = false;
+      }
+    }
+    memory.pawlyProfileMemory!.pets.set(pet.id, pet);
+  } else {
+    const statements: D1Statement[] = [];
+    if (pet.isPrimary) statements.push(db.prepare("UPDATE pets SET is_primary = 0, updated_at = ? WHERE owner_email = ?").bind(now, ownerEmail));
+    statements.push(db.prepare(`
+      INSERT INTO pets (id, owner_email, name, species, is_primary, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(pet.id, ownerEmail, pet.name, pet.species, pet.isPrimary ? 1 : 0, now, now));
+    await db.batch(statements);
+  }
   return pet;
 }
 

@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     await upsertUser(user.email, user.displayName);
     const pet = parsed.data.id
       ? await updatePet(user.email, parsed.data.id, parsed.data)
-      : await createPet(user.email, parsed.data.name, parsed.data.species);
+      : await createPet(user.email, parsed.data.name, parsed.data.species, parsed.data.isPrimary);
     if (!pet) return NextResponse.json({ error: "Pet not found" }, { status: 404, headers: noStoreHeaders() });
     return NextResponse.json({ pet, pets: await listPets(user.email) }, { status: parsed.data.id ? 200 : 201, headers: noStoreHeaders() });
   } catch (error) {

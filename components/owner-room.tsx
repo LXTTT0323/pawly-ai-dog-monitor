@@ -75,13 +75,14 @@ async function requestSessionSummary(
   startedAt: number,
   targetMinutes: number,
   sessionKind: SessionKind,
+  petName: string,
 ) {
   const fallback = summarizeWithRules(events, startedAt, Date.now(), targetMinutes, sessionKind);
   try {
     const response = await fetch("/api/session-summary", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ roomCode, dogName: "Your pet", sessionKind, targetMinutes, startedAt, events }),
+      body: JSON.stringify({ roomCode, dogName: petName, sessionKind, targetMinutes, startedAt, events }),
     });
     if (!response.ok) throw new Error("AI summary unavailable");
     return await response.json() as SessionSummary;
@@ -173,6 +174,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const [cameras, setCameras] = useState<CameraDeviceState[]>([]);
   const [selectedCameraIdentity, setSelectedCameraIdentity] = useState<string | null>(null);
   const [petKind, setPetKind] = useState<PetKind | null>(null);
+  const [activePet, setActivePet] = useState<{ name: string; species: PetKind } | null>(null);
   const [savedSounds, setSavedSounds] = useState<SavedSound[]>([]);
   const [recordingSound, setRecordingSound] = useState<"No" | "Good job" | null>(null);
   const [ambientPlaying, setAmbientPlaying] = useState(false);
@@ -182,6 +184,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const reviewSinceRef = useRef(Date.now() - 4 * 60 * 60 * 1000);
   const autoSummaryRequestedRef = useRef(false);
   const sessionSettingsRef = useRef({ sessionKind, targetMinutes });
+  const activePetNameRef = useRef("Your pet");
   const state = deriveState(events, connected);
 
   useEffect(() => {
@@ -219,6 +222,16 @@ export function OwnerRoom({ roomCode }: Props) {
 
   useEffect(() => { void refreshClips(); }, [refreshClips]);
   useEffect(() => { void listSavedSounds(roomCode).then(setSavedSounds).catch(() => undefined); }, [roomCode]);
+  useEffect(() => {
+    void fetch("/api/profile", { cache: "no-store" })
+      .then(async (response) => response.ok ? response.json() as Promise<{ pets?: Array<{ name: string; species: PetKind; isPrimary: boolean }> }> : null)
+      .then((profile) => {
+        const pet = profile?.pets?.find((candidate) => candidate.isPrimary) ?? profile?.pets?.[0] ?? null;
+        setActivePet(pet);
+        activePetNameRef.current = pet?.name ?? "Your pet";
+      })
+      .catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (!selectedCameraIdentity || !selectedDeviceId || !connected) return;
     void fetch(`/api/devices/${selectedDeviceId}/target`, { cache: "no-store" })
@@ -334,7 +347,7 @@ export function OwnerRoom({ roomCode }: Props) {
                 ? Math.min(...recent.map((event) => Date.parse(event.occurredAt)))
                 : Math.max(reviewSinceRef.current, now - 5 * 60 * 1000);
               setArrivalSummaryLoading(true);
-              void requestSessionSummary(roomCode, recent, recapStartedAt, settings.targetMinutes, settings.sessionKind)
+              void requestSessionSummary(roomCode, recent, recapStartedAt, settings.targetMinutes, settings.sessionKind, activePetNameRef.current)
                 .then(setArrivalSummary)
                 .finally(() => setArrivalSummaryLoading(false));
               try {
@@ -479,7 +492,7 @@ export function OwnerRoom({ roomCode }: Props) {
     if (!useAi) { setSummary(rulesSummary); return; }
     setSummaryLoading(true);
     try {
-      setSummary(await requestSessionSummary(roomCode, events, startedAt, targetMinutes, sessionKind));
+      setSummary(await requestSessionSummary(roomCode, events, startedAt, targetMinutes, sessionKind, activePetNameRef.current));
     } catch { setSummary(rulesSummary); } finally { setSummaryLoading(false); }
   };
 
@@ -558,7 +571,7 @@ export function OwnerRoom({ roomCode }: Props) {
     setEndingMonitoring(true);
     try {
       await sendCommand({ type: "stop_monitoring" });
-      setSummary(await requestSessionSummary(roomCode, events, startedAt, targetMinutes, sessionKind));
+      setSummary(await requestSessionSummary(roomCode, events, startedAt, targetMinutes, sessionKind, activePetNameRef.current));
       await room.disconnect();
       setConnected(false);
       setSettingsOpen(false);
@@ -808,7 +821,7 @@ export function OwnerRoom({ roomCode }: Props) {
           {connected && dogTrack?.visible && dogTrack.box && (
             <div className="dog-track-layer" style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }}>
               <div className={`dog-detection-box ${dogTrack.targetMode === "owner_guided" ? "owner-guided" : ""}`} style={coverBoxStyle(dogTrack.box, videoRef.current)}>
-                <span>{dogTrack.targetMode === "owner_guided" ? "Your pet" : petKind === "cat" ? "Cat" : "Dog"} · {Math.round(dogTrack.confidence * 100)}%</span>
+                <span>{dogTrack.targetMode === "owner_guided" ? activePet?.name ?? "Your pet" : petKind === "cat" ? "Cat" : "Dog"} · {Math.round(dogTrack.confidence * 100)}%</span>
               </div>
             </div>
           )}
