@@ -22,6 +22,8 @@ interface PetProfile {
   name: string;
   species: "dog" | "cat";
   isPrimary: boolean;
+  isMonitored: boolean;
+  photos: Array<{ id: string; url: string; createdAt: number }>;
 }
 
 export function SetupClient({ user }: { user: PawlyUser }) {
@@ -38,6 +40,8 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   const [petName, setPetName] = useState("");
   const [petSpecies, setPetSpecies] = useState<"dog" | "cat">("dog");
   const [savingPet, setSavingPet] = useState(false);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
 
   const loadRoom = useCallback(async () => {
     setStatus("loading");
@@ -75,6 +79,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   useEffect(() => { void loadRoom(); }, [loadRoom]);
 
   const watchUrl = useMemo(() => room ? `/watch?room=${room.code}` : "#", [room]);
+  const selectedPet = useMemo(() => pets.find((pet) => pet.id === selectedPetId) ?? null, [pets, selectedPetId]);
 
   async function createPairing() {
     if (!room) return;
@@ -132,6 +137,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
           name: petName,
           species: petSpecies,
           ...(petFormMode === "add" && pets.length === 0 ? { isPrimary: true } : {}),
+          ...(petFormMode === "add" ? { isMonitored: true } : {}),
         }),
       });
       const data = await response.json() as { pet?: PetProfile; pets?: PetProfile[]; error?: string };
@@ -147,14 +153,14 @@ export function SetupClient({ user }: { user: PawlyUser }) {
     }
   }
 
-  async function usePetForMonitoring(pet: PetProfile) {
+  async function makePrimaryPet(pet: PetProfile) {
     setSavingPet(true);
     setError("");
     try {
       const response = await fetch("/api/profile", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: pet.id, name: pet.name, species: pet.species, isPrimary: true }),
+        body: JSON.stringify({ id: pet.id, name: pet.name, species: pet.species, isPrimary: true, isMonitored: true }),
       });
       const data = await response.json() as { pet?: PetProfile; pets?: PetProfile[]; error?: string };
       if (!response.ok) throw new Error(data.error ?? "Could not select this pet");
@@ -164,6 +170,67 @@ export function SetupClient({ user }: { user: PawlyUser }) {
       setError(cause instanceof Error ? cause.message : "Could not select this pet");
     } finally {
       setSavingPet(false);
+    }
+  }
+
+  async function togglePetMonitoring(pet: PetProfile) {
+    if (pet.isPrimary && pet.isMonitored) {
+      setError("Choose another main pet before removing this one from monitoring.");
+      return;
+    }
+    setSavingPet(true);
+    setError("");
+    try {
+      const response = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: pet.id, name: pet.name, species: pet.species, isMonitored: !pet.isMonitored }),
+      });
+      const data = await response.json() as { pet?: PetProfile; pets?: PetProfile[]; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Could not update monitoring");
+      setPets(data.pets ?? []);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not update monitoring");
+    } finally {
+      setSavingPet(false);
+    }
+  }
+
+  async function uploadPetPhotos(files: File[]) {
+    if (!selectedPet || files.length === 0) return;
+    setUploadingPhotos(true);
+    setError("");
+    try {
+      const remaining = Math.max(0, 5 - selectedPet.photos.length);
+      const chosen = files.slice(0, remaining);
+      if (chosen.length === 0) throw new Error("This pet already has five reference photos.");
+      const form = new FormData();
+      for (const file of chosen) form.append("photos", file);
+      const response = await fetch(`/api/pets/${encodeURIComponent(selectedPet.id)}/photos`, { method: "POST", body: form });
+      const data = await response.json() as { photos?: PetProfile["photos"]; error?: string };
+      if (!response.ok || !data.photos) throw new Error(data.error ?? "Could not upload pet photos");
+      setPets((current) => current.map((pet) => pet.id === selectedPet.id ? { ...pet, photos: data.photos ?? pet.photos } : pet));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not upload pet photos");
+    } finally {
+      setUploadingPhotos(false);
+    }
+  }
+
+  async function removePetPhoto(petId: string, photoId: string) {
+    setDeletingPhotoId(photoId);
+    setError("");
+    try {
+      const response = await fetch(`/api/pets/${encodeURIComponent(petId)}/photos/${encodeURIComponent(photoId)}`, { method: "DELETE" });
+      if (!response.ok) {
+        const data = await response.json() as { error?: string };
+        throw new Error(data.error ?? "Could not remove pet photo");
+      }
+      setPets((current) => current.map((pet) => pet.id === petId ? { ...pet, photos: pet.photos.filter((photo) => photo.id !== photoId) } : pet));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not remove pet photo");
+    } finally {
+      setDeletingPhotoId(null);
     }
   }
 
@@ -199,23 +266,49 @@ export function SetupClient({ user }: { user: PawlyUser }) {
               <div className="pet-profile-heading">
                 <div>
                   <span className="eyebrow">Your pets</span>
-                  <h2>{pets.length ? "Choose who Pawly is watching" : "Who should Pawly watch?"}</h2>
-                  <p>{pets.length ? "Select a saved pet to edit it or make it the current monitoring profile." : "Add a dog or cat now. You can add more pets later."}</p>
+                  <h2>{pets.length ? `${pets.filter((pet) => pet.isMonitored).length} pet${pets.filter((pet) => pet.isMonitored).length === 1 ? "" : "s"} being monitored` : "Who should Pawly watch?"}</h2>
+                  <p>{pets.length ? "Select any pets that are home today, edit their details, and add private reference photos." : "Add a dog or cat now. You can add more pets later."}</p>
                 </div>
                 {pets.length > 0 && <button className="pet-add-link" type="button" onClick={beginAddingPet}>+ Add pet</button>}
               </div>
               {pets.length > 0 && <div className="pet-profile-list" aria-label="Saved pets">
-                {pets.map((pet) => <button type="button" className={`${selectedPetId === pet.id ? "selected" : ""} ${pet.isPrimary ? "primary" : ""}`} key={pet.id} onClick={() => selectPet(pet)}>
-                  <b aria-hidden="true">{pet.species === "cat" ? "◉" : "●"}</b>
+                {pets.map((pet) => <button type="button" className={`${selectedPetId === pet.id ? "selected" : ""} ${pet.isPrimary ? "primary" : ""} ${pet.isMonitored ? "monitored" : ""}`} key={pet.id} onClick={() => selectPet(pet)}>
+                  <b aria-hidden="true">{pet.photos[0] ? <img src={pet.photos[0].url} alt="" /> : pet.species === "cat" ? "◉" : "●"}</b>
                   <strong>{pet.name}</strong>
-                  <small>{pet.species}{pet.isPrimary ? " · current" : ""}</small>
+                  <small>{pet.species}{pet.isMonitored ? " · monitoring" : ""}{pet.isPrimary ? " · main" : ""}</small>
                 </button>)}
               </div>}
               <div className="pet-profile-editor">
                 <div className="pet-editor-heading">
-                  <strong>{petFormMode === "add" ? "Add a new pet" : `Edit ${pets.find((pet) => pet.id === selectedPetId)?.name ?? "pet"}`}</strong>
-                  {petFormMode === "edit" && pets.find((pet) => pet.id === selectedPetId)?.isPrimary && <span>Current monitoring profile</span>}
+                  <strong>{petFormMode === "add" ? "Add a new pet" : `Edit ${selectedPet?.name ?? "pet"}`}</strong>
+                  {petFormMode === "edit" && selectedPet?.isPrimary && <span>Main pet for summaries</span>}
                 </div>
+                {petFormMode === "edit" && selectedPet && <div className="pet-photo-manager">
+                  <div className="pet-photo-heading">
+                    <div><strong>Reference photos</strong><small>{selectedPet.photos.length}/5 · front, side, and full-body photos work best</small></div>
+                    <label className={selectedPet.photos.length >= 5 || uploadingPhotos ? "disabled" : ""}>
+                      {uploadingPhotos ? "Uploading…" : "+ Add photos"}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        multiple
+                        disabled={selectedPet.photos.length >= 5 || uploadingPhotos}
+                        onChange={(event) => {
+                          const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+                          event.currentTarget.value = "";
+                          void uploadPetPhotos(files);
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {selectedPet.photos.length > 0 ? <div className="pet-photo-grid">
+                    {selectedPet.photos.map((photo) => <div key={photo.id}>
+                      <img src={photo.url} alt={`Reference for ${selectedPet.name}`} />
+                      <button type="button" aria-label={`Remove reference photo for ${selectedPet.name}`} disabled={deletingPhotoId === photo.id} onClick={() => void removePetPhoto(selectedPet.id, photo.id)}>×</button>
+                    </div>)}
+                  </div> : <div className="pet-photo-empty"><span aria-hidden="true">◎</span><p>Add 3–5 clear photos to prepare this profile for individual pet recognition.</p></div>}
+                  <p className="pet-photo-privacy">Private to your account. Pawly does not publish these photos.</p>
+                </div>}
                 <div className="pet-profile-form">
                   <label><span>Name</span><input aria-label="Pet name" placeholder="Pet name" value={petName} onChange={(event) => setPetName(event.target.value)} maxLength={40} /></label>
                   <div className="pet-type-field"><span>Type</span><div className="pet-species-toggle" role="group" aria-label="Pet species">
@@ -225,12 +318,8 @@ export function SetupClient({ user }: { user: PawlyUser }) {
                 </div>
                 <div className="pet-editor-actions">
                   <button className="pet-save-button" type="button" onClick={() => void savePet()} disabled={!petName.trim() || savingPet}>{savingPet ? "Saving…" : petFormMode === "add" ? "Add pet" : "Save changes"}</button>
-                  {petFormMode === "edit" && (() => {
-                    const selectedPet = pets.find((pet) => pet.id === selectedPetId);
-                    return selectedPet && !selectedPet.isPrimary
-                      ? <button className="pet-use-button" type="button" onClick={() => void usePetForMonitoring(selectedPet)} disabled={savingPet}>Use for monitoring</button>
-                      : null;
-                  })()}
+                  {petFormMode === "edit" && selectedPet && <button className={`pet-monitor-button ${selectedPet.isMonitored ? "selected" : ""}`} type="button" onClick={() => void togglePetMonitoring(selectedPet)} disabled={savingPet}>{selectedPet.isMonitored ? "✓ Monitoring" : "Include in monitoring"}</button>}
+                  {petFormMode === "edit" && selectedPet && !selectedPet.isPrimary && <button className="pet-use-button" type="button" onClick={() => void makePrimaryPet(selectedPet)} disabled={savingPet}>Make main pet</button>}
                   {petFormMode === "add" && pets.length > 0 && <button className="pet-cancel-button" type="button" onClick={() => selectPet(pets.find((pet) => pet.isPrimary) ?? pets[0])}>Cancel</button>}
                 </div>
               </div>

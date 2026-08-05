@@ -174,7 +174,7 @@ export function OwnerRoom({ roomCode }: Props) {
   const [cameras, setCameras] = useState<CameraDeviceState[]>([]);
   const [selectedCameraIdentity, setSelectedCameraIdentity] = useState<string | null>(null);
   const [petKind, setPetKind] = useState<PetKind | null>(null);
-  const [activePet, setActivePet] = useState<{ name: string; species: PetKind } | null>(null);
+  const [activePets, setActivePets] = useState<Array<{ name: string; species: PetKind }>>([]);
   const [savedSounds, setSavedSounds] = useState<SavedSound[]>([]);
   const [recordingSound, setRecordingSound] = useState<"No" | "Good job" | null>(null);
   const [ambientPlaying, setAmbientPlaying] = useState(false);
@@ -224,11 +224,13 @@ export function OwnerRoom({ roomCode }: Props) {
   useEffect(() => { void listSavedSounds(roomCode).then(setSavedSounds).catch(() => undefined); }, [roomCode]);
   useEffect(() => {
     void fetch("/api/profile", { cache: "no-store" })
-      .then(async (response) => response.ok ? response.json() as Promise<{ pets?: Array<{ name: string; species: PetKind; isPrimary: boolean }> }> : null)
+      .then(async (response) => response.ok ? response.json() as Promise<{ pets?: Array<{ name: string; species: PetKind; isPrimary: boolean; isMonitored: boolean }> }> : null)
       .then((profile) => {
-        const pet = profile?.pets?.find((candidate) => candidate.isPrimary) ?? profile?.pets?.[0] ?? null;
-        setActivePet(pet);
-        activePetNameRef.current = pet?.name ?? "Your pet";
+        const savedPets = profile?.pets ?? [];
+        const monitoredPets = savedPets.filter((candidate) => candidate.isMonitored);
+        const selectedPets = monitoredPets.length > 0 ? monitoredPets : savedPets.slice(0, 1);
+        setActivePets(selectedPets);
+        activePetNameRef.current = selectedPets.length > 0 ? selectedPets.map((pet) => pet.name).join(" and ") : "Your pet";
       })
       .catch(() => undefined);
   }, []);
@@ -821,7 +823,7 @@ export function OwnerRoom({ roomCode }: Props) {
           {connected && dogTrack?.visible && dogTrack.box && (
             <div className="dog-track-layer" style={{ transform: zoomMode === "camera" ? "scale(1)" : `scale(${zoom})` }}>
               <div className={`dog-detection-box ${dogTrack.targetMode === "owner_guided" ? "owner-guided" : ""}`} style={coverBoxStyle(dogTrack.box, videoRef.current)}>
-                <span>{dogTrack.targetMode === "owner_guided" ? activePet?.name ?? "Your pet" : petKind === "cat" ? "Cat" : "Dog"} · {Math.round(dogTrack.confidence * 100)}%</span>
+                <span>{dogTrack.targetMode === "owner_guided" ? activePets.length === 1 ? activePets[0].name : "Your pets" : petKind === "cat" ? "Cat" : "Dog"} · {Math.round(dogTrack.confidence * 100)}%</span>
               </div>
             </div>
           )}

@@ -5,7 +5,11 @@ export const pawlyProfileSchema = {
   },
   pets: {
     primaryKey: "id",
-    columns: ["id", "owner_email", "name", "species", "is_primary", "created_at", "updated_at"],
+    columns: ["id", "owner_email", "name", "species", "is_primary", "is_monitored", "created_at", "updated_at"],
+  },
+  petPhotos: {
+    primaryKey: "id",
+    columns: ["id", "pet_id", "owner_email", "object_key", "content_type", "size_bytes", "created_at"],
   },
   devicePreferences: {
     primaryKey: "device_id",

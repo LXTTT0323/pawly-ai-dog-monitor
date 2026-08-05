@@ -6,6 +6,7 @@ export interface PetProfile {
   name: string;
   species: PetSpecies;
   isPrimary: boolean;
+  isMonitored: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -79,13 +80,22 @@ export async function listPets(ownerEmail: string): Promise<PetProfile[]> {
       .sort((left, right) => Number(right.isPrimary) - Number(left.isPrimary) || left.createdAt - right.createdAt);
   }
   const rows = await db.prepare(`
-    SELECT id, owner_email, name, species, is_primary, created_at, updated_at
+    SELECT id, owner_email, name, species, is_primary, is_monitored, created_at, updated_at
     FROM pets WHERE owner_email = ? ORDER BY is_primary DESC, created_at ASC
   `).bind(ownerEmail).all<Record<string, unknown>>();
   return (rows.results ?? []).map(mapPet);
 }
 
-export async function createPet(ownerEmail: string, name: string, species: PetSpecies, isPrimary = false): Promise<PetProfile> {
+export async function getPetForOwner(ownerEmail: string, petId: string): Promise<PetProfile | null> {
+  return (await listPets(ownerEmail)).find((pet) => pet.id === petId) ?? null;
+}
+
+export async function createPet(
+  ownerEmail: string,
+  name: string,
+  species: PetSpecies,
+  options: { isPrimary?: boolean; isMonitored?: boolean } = {},
+): Promise<PetProfile> {
   const now = Date.now();
   const existing = await listPets(ownerEmail);
   const pet: PetProfile = {
@@ -93,7 +103,8 @@ export async function createPet(ownerEmail: string, name: string, species: PetSp
     ownerEmail,
     name: name.trim().slice(0, 40) || "My pet",
     species,
-    isPrimary: existing.length === 0 || isPrimary,
+    isPrimary: existing.length === 0 || Boolean(options.isPrimary),
+    isMonitored: options.isMonitored ?? true,
     createdAt: now,
     updatedAt: now,
   };
@@ -109,19 +120,30 @@ export async function createPet(ownerEmail: string, name: string, species: PetSp
     const statements: D1Statement[] = [];
     if (pet.isPrimary) statements.push(db.prepare("UPDATE pets SET is_primary = 0, updated_at = ? WHERE owner_email = ?").bind(now, ownerEmail));
     statements.push(db.prepare(`
-      INSERT INTO pets (id, owner_email, name, species, is_primary, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(pet.id, ownerEmail, pet.name, pet.species, pet.isPrimary ? 1 : 0, now, now));
+      INSERT INTO pets (id, owner_email, name, species, is_primary, is_monitored, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(pet.id, ownerEmail, pet.name, pet.species, pet.isPrimary ? 1 : 0, pet.isMonitored ? 1 : 0, now, now));
     await db.batch(statements);
   }
   return pet;
 }
 
-export async function updatePet(ownerEmail: string, petId: string, input: { name: string; species: PetSpecies; isPrimary?: boolean }) {
+export async function updatePet(
+  ownerEmail: string,
+  petId: string,
+  input: { name: string; species: PetSpecies; isPrimary?: boolean; isMonitored?: boolean },
+) {
   const current = (await listPets(ownerEmail)).find((pet) => pet.id === petId);
   if (!current) return null;
   const now = Date.now();
-  const next = { ...current, name: input.name.trim().slice(0, 40) || current.name, species: input.species, isPrimary: input.isPrimary ?? current.isPrimary, updatedAt: now };
+  const next = {
+    ...current,
+    name: input.name.trim().slice(0, 40) || current.name,
+    species: input.species,
+    isPrimary: input.isPrimary ?? current.isPrimary,
+    isMonitored: input.isMonitored ?? current.isMonitored,
+    updatedAt: now,
+  };
   const db = await getDatabase();
   if (!db) {
     if (next.isPrimary) {
@@ -131,8 +153,8 @@ export async function updatePet(ownerEmail: string, petId: string, input: { name
   } else {
     const statements: D1Statement[] = [];
     if (next.isPrimary) statements.push(db.prepare("UPDATE pets SET is_primary = 0, updated_at = ? WHERE owner_email = ?").bind(now, ownerEmail));
-    statements.push(db.prepare("UPDATE pets SET name = ?, species = ?, is_primary = ?, updated_at = ? WHERE id = ? AND owner_email = ?")
-      .bind(next.name, next.species, next.isPrimary ? 1 : 0, now, petId, ownerEmail));
+    statements.push(db.prepare("UPDATE pets SET name = ?, species = ?, is_primary = ?, is_monitored = ?, updated_at = ? WHERE id = ? AND owner_email = ?")
+      .bind(next.name, next.species, next.isPrimary ? 1 : 0, next.isMonitored ? 1 : 0, now, petId, ownerEmail));
     await db.batch(statements);
   }
   return next;
@@ -177,6 +199,7 @@ function mapPet(row: Record<string, unknown>): PetProfile {
     name: String(row.name),
     species: row.species === "cat" ? "cat" : "dog",
     isPrimary: Number(row.is_primary) === 1,
+    isMonitored: Number(row.is_monitored) === 1,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
