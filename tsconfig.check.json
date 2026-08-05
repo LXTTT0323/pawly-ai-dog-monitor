@@ -5,6 +5,7 @@
   },
   "include": [
     "next-env.d.ts",
+    "vite-env.d.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
     "components/**/*.ts",

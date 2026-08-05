@@ -1,4 +1,5 @@
 import { ExternalE2EEKeyProvider, Room, type Participant } from "livekit-client";
+import LiveKitE2EEWorker from "livekit-client/e2ee-worker?worker";
 
 export async function createEncryptedRoom(e2eeKey: string, options: ConstructorParameters<typeof Room>[0]) {
   if (!supportsE2EE()) {
@@ -6,10 +7,9 @@ export async function createEncryptedRoom(e2eeKey: string, options: ConstructorP
   }
   const keyProvider = new ExternalE2EEKeyProvider();
   await keyProvider.setKey(e2eeKey);
-  // Keep the E2EE worker at a stable public URL. vinext's server bundle can
-  // otherwise preserve import.meta.url as a file:// URL, which browsers cannot
-  // load from the production https:// origin.
-  const worker = new Worker("/livekit-client.e2ee.worker.mjs", { type: "module" });
+  // Let Vite emit the worker as a same-origin hashed asset. A package-relative
+  // import.meta.url can survive vinext's server bundle as a file:// URL.
+  const worker = new LiveKitE2EEWorker();
   return {
     room: new Room({ ...options, e2ee: { keyProvider, worker } }),
     disposeEncryption: () => worker.terminate(),
