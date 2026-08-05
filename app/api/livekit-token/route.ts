@@ -20,7 +20,9 @@ export async function POST(request: Request) {
     const parsed = requestSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid secure room request" }, { status: 400, headers: noStoreHeaders() });
 
-    const serverUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+    // Prefer a server-only runtime variable in production. NEXT_PUBLIC values
+    // can be inlined from a developer's .env.local during the vinext build.
+    const serverUrl = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL;
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
     if (!serverUrl || !apiKey || !apiSecret) {

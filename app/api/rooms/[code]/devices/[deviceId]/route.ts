@@ -20,7 +20,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ code
     const device = await revokeDevice(room.id, deviceId);
     if (!device) return NextResponse.json({ error: "Device not found" }, { status: 404, headers: noStoreHeaders() });
 
-    const serverUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+    const serverUrl = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL;
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
     if (serverUrl && apiKey && apiSecret) {
