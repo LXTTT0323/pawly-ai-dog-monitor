@@ -26,6 +26,32 @@ interface PetProfile {
   photos: Array<{ id: string; url: string; createdAt: number }>;
 }
 
+async function preparePetPhoto(file: File) {
+  const directlySupported = ["image/jpeg", "image/png", "image/webp"].includes(file.type);
+  if (directlySupported && file.size <= 4 * 1024 * 1024) return file;
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("This photo format could not be prepared. Try a screenshot or JPG."));
+      image.src = objectUrl;
+    });
+    const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.84));
+    if (!blob) throw new Error("This photo could not be prepared. Try another image.");
+    return new File([blob], `${file.name.replace(/\.[^.]+$/, "") || "pet-photo"}.jpg`, { type: "image/jpeg" });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export function SetupClient({ user }: { user: PawlyUser }) {
   const [room, setRoom] = useState<RoomResponse["room"]>(null);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -204,8 +230,9 @@ export function SetupClient({ user }: { user: PawlyUser }) {
       const remaining = Math.max(0, 5 - selectedPet.photos.length);
       const chosen = files.slice(0, remaining);
       if (chosen.length === 0) throw new Error("This pet already has five reference photos.");
+      const prepared = await Promise.all(chosen.map(preparePetPhoto));
       const form = new FormData();
-      for (const file of chosen) form.append("photos", file);
+      for (const file of prepared) form.append("photos", file);
       const response = await fetch(`/api/pets/${encodeURIComponent(selectedPet.id)}/photos`, { method: "POST", body: form });
       const data = await response.json() as { photos?: PetProfile["photos"]; error?: string };
       if (!response.ok || !data.photos) throw new Error(data.error ?? "Could not upload pet photos");
@@ -290,7 +317,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
                       {uploadingPhotos ? "Uploading…" : "+ Add photos"}
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
+                        accept="image/*"
                         multiple
                         disabled={selectedPet.photos.length >= 5 || uploadingPhotos}
                         onChange={(event) => {
