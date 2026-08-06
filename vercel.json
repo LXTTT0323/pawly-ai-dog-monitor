@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "pnpm build:next"
+  "buildCommand": "pnpm build:next",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://pawly-coach-beta.lxttt.chatgpt.site/api/:path*"
+    }
+  ]
 }

@@ -1,0 +1,10 @@
+.next
+.vinext
+.wrangler
+dist
+node_modules
+worker-bundle
+*.tar
+*.tar.gz
+*.log
+.env*

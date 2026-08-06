@@ -10,5 +10,6 @@ coverage
 *.log
 *-smoke.png
 *.tsbuildinfo
+public/livekit-e2ee-worker.js
 
 .env*
