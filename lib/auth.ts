@@ -20,6 +20,14 @@ export async function getPawlyUser(): Promise<PawlyUser | null> {
       : email;
     return { email, displayName };
   }
+  const bridgeSecret = process.env.PAWLY_VERCEL_BRIDGE_SECRET;
+  const suppliedBridgeSecret = requestHeaders.get("x-pawly-vercel-bridge");
+  if (bridgeSecret && suppliedBridgeSecret && safeEqual(bridgeSecret, suppliedBridgeSecret)) {
+    const bridgedOwner = requestHeaders.get("x-pawly-owner-id")?.trim().toLowerCase();
+    if (bridgedOwner === "vercel-owner@pawly.beta") {
+      return { email: bridgedOwner, displayName: "Pawly beta owner" };
+    }
+  }
   if (process.env.NODE_ENV !== "production") {
     const localEmail = (process.env.PAWLY_LOCAL_OWNER_EMAIL ?? "owner@pawly.local").trim().toLowerCase();
     return { email: localEmail, displayName: "Local owner" };
@@ -55,4 +63,13 @@ function safeDecode(value: string) {
   } catch {
     return null;
   }
+}
+
+function safeEqual(expected: string, supplied: string) {
+  if (expected.length !== supplied.length) return false;
+  let mismatch = 0;
+  for (let index = 0; index < expected.length; index += 1) {
+    mismatch |= expected.charCodeAt(index) ^ supplied.charCodeAt(index);
+  }
+  return mismatch === 0;
 }
