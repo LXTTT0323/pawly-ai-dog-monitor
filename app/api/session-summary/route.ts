@@ -67,7 +67,10 @@ export async function POST(request: Request) {
     globalBudget.pawlyAiSpend! += estimatedAiCostUsd;
     await logAccess(room.id, "owner", user.email, "ai_summary_created");
     return NextResponse.json({ ...fallback, ...result, source: "openai", estimatedAiCostUsd }, { headers: noStoreHeaders() });
-  } catch {
+  } catch (error) {
+    console.error("Pawly AI summary failed", error instanceof Error
+      ? { name: error.name, message: error.message }
+      : { name: "UnknownError", message: "Unknown AI summary failure" });
     return NextResponse.json(fallback, { headers: noStoreHeaders() });
   }
 }
