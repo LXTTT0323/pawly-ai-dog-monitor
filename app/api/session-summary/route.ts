@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       featureEnabled: process.env.AI_FEATURE_ENABLED === "true",
       apiKeyConfigured: Boolean(process.env.OPENAI_API_KEY),
     });
-    return NextResponse.json(fallback, { headers: noStoreHeaders() });
+    return NextResponse.json({ ...fallback, aiStatus: "not_configured" }, { headers: noStoreHeaders() });
   }
 
   const dailyLimit = Number(process.env.AI_DAILY_REQUEST_LIMIT ?? 20);
@@ -77,6 +77,6 @@ export async function POST(request: Request) {
     console.error("Pawly AI summary failed", error instanceof Error
       ? { name: error.name, message: error.message }
       : { name: "UnknownError", message: "Unknown AI summary failure" });
-    return NextResponse.json(fallback, { headers: noStoreHeaders() });
+    return NextResponse.json({ ...fallback, aiStatus: "provider_error" }, { headers: noStoreHeaders() });
   }
 }
