@@ -13,6 +13,19 @@ export async function proxy(request: NextRequest) {
     return new NextResponse("Pawly owner access is not configured.", { status: 503 });
   }
 
+  if (request.nextUrl.pathname === "/signout-with-chatgpt") {
+    const destination = new URL(safeReturnTo(request.nextUrl.searchParams.get("return_to") ?? "/"), request.url);
+    const response = NextResponse.redirect(destination);
+    response.cookies.set(ACCESS_COOKIE, "", {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      expires: new Date(0),
+    });
+    return response;
+  }
+
   if (request.nextUrl.pathname === "/vercel-access") {
     const suppliedKey = request.nextUrl.searchParams.get("key") ?? "";
     if (!safeEqual(accessKey, suppliedKey)) {

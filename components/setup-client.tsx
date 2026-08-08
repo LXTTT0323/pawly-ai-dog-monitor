@@ -361,7 +361,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
                 <p>Create a private link, then open it on any iPad, phone, or computer you want to use as a camera. Each link lasts 15 minutes and approves one device.</p>
                 <button className="button button-primary" type="button" onClick={() => void createPairing()}>{devices.length ? "Create link for another camera" : "Create private pairing link"}</button>
                 {pairing && <div className="pairing-card" role="status">
-                  <div><strong>Pairing link ready</strong><span>Expires {new Date(pairing.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>
+                  <div><strong>Pairing link ready</strong><span>Valid for 15 minutes</span></div>
                   <div className="button-row">
                     <button className="button button-dark" onClick={() => void copyPairing()}>{copied ? "Link copied" : "Copy link"}</button>
                     <a className="button button-ghost" href={pairing.url}>Open pairing page</a>
