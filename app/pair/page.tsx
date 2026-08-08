@@ -39,9 +39,10 @@ export default function PairPage() {
       const data = await response.json() as { roomCode?: string; error?: string };
       if (!response.ok || !data.roomCode) throw new Error(data.error ?? "Pairing failed");
       window.history.replaceState({}, "", "/pair");
+      localStorage.setItem("pawly-paired-room", data.roomCode);
       setRoomCode(data.roomCode);
       setState("success");
-      setMessage("This device is approved. Only your signed-in owner can watch it.");
+      setMessage("This browser is now trusted for 180 days. Open the camera below, then bookmark it or add it to your Home Screen. You will not need another pairing link tomorrow.");
     } catch (cause) {
       setState("error");
       setMessage(cause instanceof Error ? cause.message : "This pairing link could not be used.");
@@ -56,7 +57,7 @@ export default function PairPage() {
       <h1>{state === "success" ? "Ready to watch the room." : state === "error" ? "Ask the owner for a new link." : state === "pairing" ? "Approving this device…" : "Pair this camera device?"}</h1>
       <p>{message}</p>
       {state === "ready" && <button className="button button-primary" type="button" onClick={() => void pairThisDevice()}>Approve & pair this device</button>}
-      {state === "success" && <a className="button button-primary" href={`/camera?room=${roomCode}`}>Open camera & allow access</a>}
+      {state === "success" && <><a className="button button-primary" href={`/camera?room=${roomCode}`}>Open camera & allow access</a><p className="privacy-footnote">Use this same camera page whenever you monitor again. A new pairing link is only needed if browser data is cleared or the owner removes this device.</p></>}
       {state === "error" && <p className="privacy-footnote">Pairing links expire after 15 minutes and can only approve one device.</p>}
       {state === "ready" && <p className="privacy-footnote">Opening or copying this page does not use the link. It is consumed only after you approve this device.</p>}
     </section>

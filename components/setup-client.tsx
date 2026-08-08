@@ -68,6 +68,8 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   const [savingPet, setSavingPet] = useState(false);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
+  const [pendingDeletePetId, setPendingDeletePetId] = useState<string | null>(null);
+  const [deletingPetId, setDeletingPetId] = useState<string | null>(null);
 
   const loadRoom = useCallback(async () => {
     setStatus("loading");
@@ -137,6 +139,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   }
 
   function selectPet(pet: PetProfile) {
+    setPendingDeletePetId(null);
     setSelectedPetId(pet.id);
     setPetFormMode("edit");
     setPetName(pet.name);
@@ -144,6 +147,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   }
 
   function beginAddingPet() {
+    setPendingDeletePetId(null);
     setSelectedPetId(null);
     setPetFormMode("add");
     setPetName("");
@@ -261,6 +265,30 @@ export function SetupClient({ user }: { user: PawlyUser }) {
     }
   }
 
+  async function removePet(pet: PetProfile) {
+    if (pendingDeletePetId !== pet.id) {
+      setPendingDeletePetId(pet.id);
+      return;
+    }
+    setDeletingPetId(pet.id);
+    setError("");
+    try {
+      const response = await fetch(`/api/pets/${encodeURIComponent(pet.id)}`, { method: "DELETE" });
+      const data = await response.json() as { pets?: PetProfile[]; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Could not remove this pet");
+      const savedPets = data.pets ?? [];
+      setPets(savedPets);
+      const nextPet = savedPets.find((candidate) => candidate.isPrimary) ?? savedPets[0];
+      if (nextPet) selectPet(nextPet);
+      else beginAddingPet();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not remove this pet");
+    } finally {
+      setDeletingPetId(null);
+      setPendingDeletePetId(null);
+    }
+  }
+
   return (
     <main className="app-shell">
       <nav className="nav shell">
@@ -348,6 +376,8 @@ export function SetupClient({ user }: { user: PawlyUser }) {
                   {petFormMode === "edit" && selectedPet && <button className={`pet-monitor-button ${selectedPet.isMonitored ? "selected" : ""}`} type="button" onClick={() => void togglePetMonitoring(selectedPet)} disabled={savingPet}>{selectedPet.isMonitored ? "✓ Monitoring" : "Include in monitoring"}</button>}
                   {petFormMode === "edit" && selectedPet && !selectedPet.isPrimary && <button className="pet-use-button" type="button" onClick={() => void makePrimaryPet(selectedPet)} disabled={savingPet}>Make main pet</button>}
                   {petFormMode === "add" && pets.length > 0 && <button className="pet-cancel-button" type="button" onClick={() => selectPet(pets.find((pet) => pet.isPrimary) ?? pets[0])}>Cancel</button>}
+                  {petFormMode === "edit" && selectedPet && <button className={`pet-delete-button ${pendingDeletePetId === selectedPet.id ? "confirm" : ""}`} type="button" onClick={() => void removePet(selectedPet)} disabled={deletingPetId === selectedPet.id}>{deletingPetId === selectedPet.id ? "Removing…" : pendingDeletePetId === selectedPet.id ? `Delete ${selectedPet.name}?` : "Delete pet"}</button>}
+                  {pendingDeletePetId === selectedPet?.id && <button className="pet-cancel-button" type="button" onClick={() => setPendingDeletePetId(null)}>Keep pet</button>}
                 </div>
               </div>
             </div>
@@ -357,16 +387,16 @@ export function SetupClient({ user }: { user: PawlyUser }) {
             <div className="setup-step">
               <span>1</span>
               <div>
-                <h2>{devices.length ? "Add another camera device" : "Pair a camera device"}</h2>
-                <p>Create a private link, then open it on any iPad, phone, or computer you want to use as a camera. Each link lasts 15 minutes and approves one device.</p>
-                <button className="button button-primary" type="button" onClick={() => void createPairing()}>{devices.length ? "Create link for another camera" : "Create private pairing link"}</button>
+                <h2>{devices.length ? "Pair a new camera device" : "Pair your first camera device"}</h2>
+                <p>This is a one-time setup for each iPad, phone, or computer. After pairing, the same browser stays trusted for 180 days and can reconnect tomorrow without a new link.</p>
+                <button className="button button-primary" type="button" onClick={() => void createPairing()}>{devices.length ? "Create one-time link for a new device" : "Create one-time pairing link"}</button>
                 {pairing && <div className="pairing-card" role="status">
                   <div><strong>Pairing link ready</strong><span>Valid for 15 minutes</span></div>
                   <div className="button-row">
                     <button className="button button-dark" onClick={() => void copyPairing()}>{copied ? "Link copied" : "Copy link"}</button>
                     <a className="button button-ghost" href={pairing.url}>Open pairing page</a>
                   </div>
-                  <small>Copying or opening the link does not consume it. The camera device must tap “Approve & pair” before the link is used.</small>
+                  <small>Use this only on a new device or browser. Opening the link does not consume it; the device must tap “Approve & pair.”</small>
                 </div>}
               </div>
             </div>
@@ -394,7 +424,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
                     <button type="button" onClick={() => void revoke(device.id)} disabled={revoking === device.id}>{revoking === device.id ? "Removing…" : "Remove"}</button>
                   </div>)}
                 </div>}
-                <p className="privacy-footnote">You can add multiple camera devices with separate pairing links. Removing one disconnects only that device and prevents it from reconnecting.</p>
+                <p className="privacy-footnote">Already paired? Reopen the same Pawly camera page or Home Screen shortcut—no new link needed. Create another link only for a new browser/device, after clearing browser data, or after removing a device here.</p>
               </div>
             </div>
           </>}

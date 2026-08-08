@@ -115,6 +115,10 @@ html,body{max-width:100%;overflow-x:hidden}.hero-copy,.setup-intro,.setup-panel,
   .settings-action-row{grid-template-columns:1fr}
   .camera-device-checklist{margin-top:13px}
 }
+@media(max-width:600px){.sound-button-group{width:100%;align-items:stretch}.sound-button-group .sound-button-wrap{flex:1}.sound-preview{min-width:76px}}
+
+.pet-delete-button{margin-left:auto;border:1px solid rgba(154,62,38,.18);background:#fff7f3;color:#8a3926}.pet-delete-button.confirm{border-color:#a5462d;background:#a5462d;color:#fff}
+.sound-button-group{display:flex;align-items:center;gap:5px}.sound-preview{min-height:32px;border:1px solid rgba(43,83,67,.14);border-radius:999px;background:#fff;color:#496a5d;padding:0 9px;font-size:8px;font-weight:800}.sound-feedback{display:flex;align-items:center;gap:7px;margin:0 0 9px;padding:9px 11px;border-radius:10px;background:#edf4ee;color:#45695a;font-size:8px;line-height:1.45}.sound-feedback span{display:grid;place-items:center;flex:0 0 17px;width:17px;height:17px;border-radius:50%;background:#6e9e86;color:#fff}.sound-feedback.blocked{background:#fff0ea;color:#873f2a}.sound-feedback.blocked span{background:#b75a3c}
 
 /* Private beta owner access */
 .owner-access-page{min-height:100svh;background:radial-gradient(circle at 83% 22%,rgba(205,224,209,.72),transparent 31%),var(--cream)}

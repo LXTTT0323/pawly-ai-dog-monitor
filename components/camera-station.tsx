@@ -71,6 +71,7 @@ export function CameraStation({ roomCode }: Props) {
   const facingModeRef = useRef<CameraFacing>("environment");
   const ambientContextRef = useRef<AudioContext | null>(null);
   const ambientSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const soundPlaybackRef = useRef<HTMLAudioElement | null>(null);
   const [status, setStatus] = useState<"idle" | "connecting" | "live" | "error">("idle");
   const [standby, setStandby] = useState(false);
   const [error, setError] = useState("");
@@ -358,6 +359,8 @@ export function CameraStation({ roomCode }: Props) {
     audioEnabledRef.current = false;
     setAudioStatus("off");
     stopAmbient();
+    soundPlaybackRef.current?.pause();
+    soundPlaybackRef.current = null;
     setTorchOn(false);
     await publishAudioStatus(false).catch(() => undefined);
     await publishEvent("camera_stopped");
@@ -429,12 +432,40 @@ export function CameraStation({ roomCode }: Props) {
       roomRef.current = room;
       room.registerByteStreamHandler("pawly-sound", (reader) => {
         void reader.readAll().then(async (chunks) => {
+          const soundId = reader.info.name.match(/^pawly-sound-([^.]+)/)?.[1] ?? reader.info.name;
+          const report = async (playbackStatus: "playing" | "finished" | "blocked", message?: string) => {
+            await room.localParticipant.publishData(
+              new TextEncoder().encode(JSON.stringify({ type: "sound_playback", soundId, status: playbackStatus, message })),
+              { reliable: true, topic: "pawly-camera-status" },
+            ).catch(() => undefined);
+          };
           const blob = new Blob(chunks.map((chunk) => Uint8Array.from(chunk).buffer), { type: reader.info.mimeType || "audio/webm" });
           const url = URL.createObjectURL(blob);
+          soundPlaybackRef.current?.pause();
           const audio = new Audio(url);
-          audio.volume = 0.8;
-          await audio.play();
-          audio.addEventListener("ended", () => URL.revokeObjectURL(url), { once: true });
+          soundPlaybackRef.current = audio;
+          audio.volume = 0.9;
+          audio.preload = "auto";
+          audio.addEventListener("ended", () => {
+            URL.revokeObjectURL(url);
+            if (soundPlaybackRef.current === audio) soundPlaybackRef.current = null;
+            void report("finished", "Played on the camera");
+          }, { once: true });
+          audio.addEventListener("error", () => {
+            URL.revokeObjectURL(url);
+            if (soundPlaybackRef.current === audio) soundPlaybackRef.current = null;
+            void report("blocked", "The camera could not decode this recording. Re-record it in a supported format.");
+          }, { once: true });
+          try {
+            await room.startAudio().catch(() => undefined);
+            await ambientContextRef.current?.resume().catch(() => undefined);
+            await audio.play();
+            await report("playing", "Playing on the camera now");
+          } catch {
+            URL.revokeObjectURL(url);
+            if (soundPlaybackRef.current === audio) soundPlaybackRef.current = null;
+            await report("blocked", "Sound is blocked on the camera. Tap the camera screen once, then try again.");
+          }
         }).catch(() => undefined);
       });
       room.on(RoomEvent.Disconnected, () => { setStatus("idle"); disposeEncryptionRef.current?.(); disposeEncryptionRef.current = null; });

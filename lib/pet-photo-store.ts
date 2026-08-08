@@ -136,6 +136,23 @@ export async function deletePetPhoto(ownerEmail: string, petId: string, photoId:
   return Boolean(result.meta?.changes);
 }
 
+export async function deleteAllPetPhotos(ownerEmail: string, petId: string) {
+  const photos = await listPetPhotos(ownerEmail, petId);
+  if (photos.length === 0) return 0;
+  const { db, bucket } = await getBindings();
+  if (!db || !bucket) {
+    for (const photo of photos) {
+      memory.pawlyPetPhotoMemory!.photos.delete(photo.id);
+      memory.pawlyPetPhotoMemory!.blobs.delete(photo.objectKey);
+    }
+    return photos.length;
+  }
+  await Promise.all(photos.map((photo) => bucket.delete(photo.objectKey)));
+  await Promise.all(photos.map((photo) => db.prepare("DELETE FROM pet_photos WHERE id = ? AND pet_id = ? AND owner_email = ?")
+    .bind(photo.id, petId, ownerEmail).run()));
+  return photos.length;
+}
+
 function mapPhoto(row: Record<string, unknown>): PetPhoto {
   return {
     id: String(row.id),

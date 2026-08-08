@@ -40,6 +40,12 @@ const durationOptions: Record<SessionKind, number[]> = {
   away_monitoring: [30, 60, 120, 180, 240],
 };
 
+function preferredAudioRecordingType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return "";
+  return ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
+    .find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+}
+
 function durationLabel(minutes: number) {
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
@@ -136,6 +142,9 @@ export function OwnerRoom({ roomCode }: Props) {
   const cameraTracksRef = useRef(new Map<string, { video?: Track; audio?: Track }>());
   const selectedCameraIdentityRef = useRef<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const soundRecordingTimerRef = useRef<number | null>(null);
+  const soundDeliveryTimerRef = useRef<number | null>(null);
+  const localSoundPreviewRef = useRef<HTMLAudioElement | null>(null);
   const disposeEncryptionRef = useRef<(() => void) | null>(null);
   const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<PawlyEvent[]>([]);
@@ -179,6 +188,8 @@ export function OwnerRoom({ roomCode }: Props) {
   const [recordingSound, setRecordingSound] = useState<"No" | "Good job" | null>(null);
   const [ambientPlaying, setAmbientPlaying] = useState(false);
   const [soundBusy, setSoundBusy] = useState(false);
+  const [soundNotice, setSoundNotice] = useState("");
+  const [soundDelivery, setSoundDelivery] = useState<{ soundId: string; status: "sending" | "playing" | "finished" | "blocked"; message: string } | null>(null);
   const [recapExpanded, setRecapExpanded] = useState(false);
   const [cameraMediaRevision, setCameraMediaRevision] = useState(0);
   const reviewSinceRef = useRef(Date.now() - 4 * 60 * 60 * 1000);
@@ -222,6 +233,13 @@ export function OwnerRoom({ roomCode }: Props) {
 
   useEffect(() => { void refreshClips(); }, [refreshClips]);
   useEffect(() => { void listSavedSounds(roomCode).then(setSavedSounds).catch(() => undefined); }, [roomCode]);
+  useEffect(() => () => {
+    if (soundRecordingTimerRef.current != null) window.clearTimeout(soundRecordingTimerRef.current);
+    if (soundDeliveryTimerRef.current != null) window.clearTimeout(soundDeliveryTimerRef.current);
+    if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+    mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    localSoundPreviewRef.current?.pause();
+  }, []);
   useEffect(() => {
     void fetch("/api/profile", { cache: "no-store" })
       .then(async (response) => response.ok ? response.json() as Promise<{ pets?: Array<{ name: string; species: PetKind; isPrimary: boolean; isMonitored: boolean }> }> : null)
@@ -375,7 +393,7 @@ export function OwnerRoom({ roomCode }: Props) {
         }
         if (topic === "pawly-camera-status") {
           try {
-            const status = JSON.parse(new TextDecoder().decode(payload)) as CameraHealth & { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number; enabled?: boolean };
+            const status = JSON.parse(new TextDecoder().decode(payload)) as CameraHealth & { type?: string; supported?: boolean; zoom?: number; min?: number; max?: number; enabled?: boolean; soundId?: string; status?: "playing" | "finished" | "blocked"; message?: string };
             if (status.type === "health_status" && participant) {
               setCameras((items) => items.map((item) => item.identity === participant.identity ? { ...item, health: status } : item));
             }
@@ -388,6 +406,13 @@ export function OwnerRoom({ roomCode }: Props) {
             if (status.type === "audio_status") {
               setCameraAudioStatus(status.enabled ? "on" : "off");
               if (status.enabled) setRoomSoundRequest("idle");
+            }
+            if (status.type === "sound_playback" && status.soundId && status.status) {
+              if (soundDeliveryTimerRef.current != null) window.clearTimeout(soundDeliveryTimerRef.current);
+              soundDeliveryTimerRef.current = null;
+              const message = status.message ?? (status.status === "playing" ? "Playing on the camera now" : status.status === "finished" ? "Played on the camera" : "Playback needs attention on the camera");
+              setSoundDelivery({ soundId: status.soundId, status: status.status, message });
+              if (status.status === "blocked") setError(message);
             }
             if (status.type === "target_invalidated") {
               setDogTrack((current) => current ? { ...current, targetMode: "auto" } : current);
@@ -714,24 +739,66 @@ export function OwnerRoom({ roomCode }: Props) {
       return;
     }
     try {
+      setSoundDelivery(null);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      const recorder = new MediaRecorder(stream);
+      const mimeType = preferredAudioRecordingType();
+      const recorder = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: 64_000 });
       const chunks: Blob[] = [];
+      setSoundNotice(`Recording “${label}”… speak clearly, then tap Stop & save.`);
       recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+      recorder.onerror = () => {
+        setError("The browser interrupted this recording. Please try again.");
+        setSoundNotice("");
+      };
+      recorder.onstop = async () => {
+        if (soundRecordingTimerRef.current != null) window.clearTimeout(soundRecordingTimerRef.current);
+        soundRecordingTimerRef.current = null;
+        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+        if (blob.size < 300) {
+          setError("The recording was empty. Check microphone permission and try again.");
+          setSoundNotice("");
+          stream.getTracks().forEach((track) => track.stop());
+          mediaRecorderRef.current = null;
+          setRecordingSound(null);
+          return;
+        }
         const sound: SavedSound = { id: crypto.randomUUID(), roomCode, label, createdAt: Date.now(), mimeType: blob.type, blob };
-        void saveSound(sound).then(() => listSavedSounds(roomCode)).then(setSavedSounds).catch(() => setError("The recording could not be saved on this device."));
+        try {
+          await saveSound(sound);
+          setSavedSounds(await listSavedSounds(roomCode));
+          setSoundNotice(`“${label}” saved. Tap Test here before sending it to the camera.`);
+        } catch {
+          setError("The recording could not be saved on this device.");
+          setSoundNotice("");
+        }
         stream.getTracks().forEach((track) => track.stop());
         mediaRecorderRef.current = null;
         setRecordingSound(null);
       };
       mediaRecorderRef.current = recorder;
       setRecordingSound(label);
-      recorder.start();
-      window.setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 5_000);
+      recorder.start(250);
+      soundRecordingTimerRef.current = window.setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 6_000);
     } catch {
       setError("Allow microphone access to record a sound button.");
+      setSoundNotice("");
+    }
+  };
+
+  const previewSavedSound = async (sound: SavedSound) => {
+    setSoundDelivery(null);
+    localSoundPreviewRef.current?.pause();
+    const url = URL.createObjectURL(sound.blob);
+    const audio = new Audio(url);
+    localSoundPreviewRef.current = audio;
+    audio.addEventListener("ended", () => { URL.revokeObjectURL(url); if (localSoundPreviewRef.current === audio) localSoundPreviewRef.current = null; }, { once: true });
+    audio.addEventListener("error", () => { URL.revokeObjectURL(url); setError("This browser could not play the saved recording. Record it again in this browser."); }, { once: true });
+    try {
+      await audio.play();
+      setSoundNotice(`Testing “${sound.label}” on this owner device.`);
+    } catch {
+      URL.revokeObjectURL(url);
+      setError("Tap Test again to allow sound playback in this browser.");
     }
   };
 
@@ -739,6 +806,7 @@ export function OwnerRoom({ roomCode }: Props) {
     const room = roomRef.current;
     if (!room || !selectedCameraIdentity || soundBusy) return;
     setSoundBusy(true);
+    setSoundDelivery({ soundId: sound.id, status: "sending", message: `Sending “${sound.label}” to the selected camera…` });
     try {
       const extension = sound.mimeType.includes("mp4") ? "m4a" : "webm";
       await room.localParticipant.sendFile(new File([sound.blob], `pawly-sound-${sound.id}.${extension}`, { type: sound.mimeType }), {
@@ -746,16 +814,24 @@ export function OwnerRoom({ roomCode }: Props) {
         mimeType: sound.mimeType,
         destinationIdentities: [selectedCameraIdentity],
       });
+      if (soundDeliveryTimerRef.current != null) window.clearTimeout(soundDeliveryTimerRef.current);
+      soundDeliveryTimerRef.current = window.setTimeout(() => {
+        setSoundDelivery((current) => current?.soundId === sound.id && current.status === "sending"
+          ? { soundId: sound.id, status: "blocked", message: "The camera received no playback confirmation. Check that its volume is up, tap its screen once, and try again." }
+          : current);
+      }, 8_000);
     } catch {
+      setSoundDelivery({ soundId: sound.id, status: "blocked", message: "The sound could not reach this camera." });
       setError("The sound could not reach this camera.");
     } finally {
-      window.setTimeout(() => setSoundBusy(false), 900);
+      setSoundBusy(false);
     }
   };
 
   const removeSound = async (id: string) => {
     await deleteSound(id);
     setSavedSounds(await listSavedSounds(roomCode));
+    setSoundDelivery((current) => current?.soundId === id ? null : current);
   };
 
   const selectCamera = async (identity: string) => {
@@ -890,11 +966,12 @@ export function OwnerRoom({ roomCode }: Props) {
         <section className="soundboard-card">
           <div className="soundboard-heading"><div><span className="eyebrow">Pet soundboard</span><strong>Familiar sounds, one tap away</strong></div><span>{selectedCamera?.name ?? "Choose a camera"}</span></div>
           <div className="soundboard-actions">
-            {savedSounds.map((sound) => <div className="sound-button-wrap" key={sound.id}><button disabled={!connected || soundBusy} onClick={() => void playSavedSound(sound)}>▶ {sound.label}</button><button className="sound-delete" aria-label={`Delete ${sound.label}`} onClick={() => void removeSound(sound.id)}>×</button></div>)}
+            {savedSounds.map((sound) => <div className="sound-button-group" key={sound.id}><div className="sound-button-wrap"><button disabled={!connected || soundBusy} onClick={() => void playSavedSound(sound)}>▶ {sound.label}</button><button className="sound-delete" aria-label={`Delete ${sound.label}`} onClick={() => void removeSound(sound.id)}>×</button></div><button className="sound-preview" type="button" onClick={() => void previewSavedSound(sound)}>Test here</button></div>)}
             {!savedSounds.some((sound) => sound.label === "No") && <button className={recordingSound === "No" ? "recording" : ""} onClick={() => void recordSound("No")}>{recordingSound === "No" ? "■ Stop & save" : "● Record “No”"}</button>}
             {!savedSounds.some((sound) => sound.label === "Good job") && <button className={recordingSound === "Good job" ? "recording" : ""} onClick={() => void recordSound("Good job")}>{recordingSound === "Good job" ? "■ Stop & save" : "● Record praise"}</button>}
             <button className={ambientPlaying ? "active" : ""} disabled={!connected} onClick={() => void toggleAmbient()}>{ambientPlaying ? "■ Stop quiet sound" : "♪ Play quiet ambient"}</button>
           </div>
+          {(soundNotice || soundDelivery) && <div className={`sound-feedback ${soundDelivery?.status ?? "local"}`} role="status"><span aria-hidden="true">{soundDelivery?.status === "blocked" ? "!" : soundDelivery?.status === "finished" ? "✓" : "•"}</span>{soundDelivery?.message ?? soundNotice}</div>}
           <small>Custom voice buttons stay on this owner device and are sent only to the selected camera.</small>
         </section>
         <div className="timeline-list">{events.length === 0 ? <div className="empty-timeline"><span>◌</span><div><strong>No activity detected yet</strong><p>Pawly will show pet movement, sound, and visibility changes here. Camera movement is ignored.</p></div></div> : events.map((event) => <article className="timeline-event" key={event.id}><div className={`event-symbol ${event.type}`}>{eventSymbol(event.type)}</div><div><strong>{event.message}</strong><span>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · {event.deviceName ? `${event.deviceName} · ` : ""}{Math.round(event.confidence * 100)}% confidence</span>{event.motionScore != null && <small>Pet movement score {Math.round(event.motionScore * 100)}%</small>}</div></article>)}</div>

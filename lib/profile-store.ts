@@ -160,6 +160,34 @@ export async function updatePet(
   return next;
 }
 
+export async function deletePet(ownerEmail: string, petId: string) {
+  const current = await getPetForOwner(ownerEmail, petId);
+  if (!current) return false;
+  const remaining = (await listPets(ownerEmail)).filter((pet) => pet.id !== petId);
+  const replacement = current.isPrimary ? remaining[0] : null;
+  const now = Date.now();
+  const db = await getDatabase();
+  if (!db) {
+    memory.pawlyProfileMemory!.pets.delete(petId);
+    if (replacement) {
+      replacement.isPrimary = true;
+      replacement.isMonitored = true;
+      replacement.updatedAt = now;
+      memory.pawlyProfileMemory!.pets.set(replacement.id, replacement);
+    }
+    return true;
+  }
+  const statements: D1Statement[] = [
+    db.prepare("DELETE FROM pets WHERE id = ? AND owner_email = ?").bind(petId, ownerEmail),
+  ];
+  if (replacement) {
+    statements.push(db.prepare("UPDATE pets SET is_primary = 1, is_monitored = 1, updated_at = ? WHERE id = ? AND owner_email = ?")
+      .bind(now, replacement.id, ownerEmail));
+  }
+  await db.batch(statements);
+  return true;
+}
+
 export async function getPetTarget(deviceId: string) {
   const db = await getDatabase();
   if (!db) return memory.pawlyProfileMemory!.targets.get(deviceId) ?? null;
