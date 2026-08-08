@@ -16,7 +16,10 @@ export async function proxy(request: NextRequest) {
   if (request.nextUrl.pathname === "/vercel-access") {
     const suppliedKey = request.nextUrl.searchParams.get("key") ?? "";
     if (!safeEqual(accessKey, suppliedKey)) {
-      return new NextResponse("This Pawly owner link is invalid.", { status: 403 });
+      const denied = new URL("/owner-access", request.url);
+      denied.searchParams.set("error", "invalid");
+      denied.searchParams.set("return_to", safeReturnTo(request.nextUrl.searchParams.get("return_to")));
+      return NextResponse.redirect(denied);
     }
     const destination = new URL(safeReturnTo(request.nextUrl.searchParams.get("return_to")), request.url);
     const response = NextResponse.redirect(destination);
@@ -36,8 +39,14 @@ export async function proxy(request: NextRequest) {
     || request.nextUrl.pathname === "/watch"
     || request.nextUrl.pathname === "/signin-with-chatgpt";
 
+  if (isOwner && request.nextUrl.pathname === "/owner-access") {
+    return NextResponse.redirect(new URL(safeReturnTo(request.nextUrl.searchParams.get("return_to")), request.url));
+  }
+
   if (!isOwner && protectedPage) {
-    return NextResponse.redirect(new URL("/?owner_access=required", request.url));
+    const ownerAccess = new URL("/owner-access", request.url);
+    ownerAccess.searchParams.set("return_to", `${request.nextUrl.pathname}${request.nextUrl.search}`);
+    return NextResponse.redirect(ownerAccess);
   }
 
   const requestHeaders = new Headers(request.headers);

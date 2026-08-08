@@ -116,6 +116,18 @@ html,body{max-width:100%;overflow-x:hidden}.hero-copy,.setup-intro,.setup-panel,
   .camera-device-checklist{margin-top:13px}
 }
 
+/* Private beta owner access */
+.owner-access-page{min-height:100svh;background:radial-gradient(circle at 83% 22%,rgba(205,224,209,.72),transparent 31%),var(--cream)}
+.owner-access-shell{min-height:calc(100svh - 86px);display:grid;grid-template-columns:minmax(0,1fr) minmax(390px,.72fr);align-items:center;gap:90px;padding-block:55px 90px}
+.owner-access-copy h1{font-size:clamp(58px,7vw,92px);line-height:.92;margin:28px 0}.owner-access-copy h1 em{color:var(--orange);font-weight:500}
+.owner-access-copy>p{max-width:650px;color:#60776e;font-size:17px;line-height:1.75}
+.owner-access-promises{display:grid;gap:10px;margin-top:30px}.owner-access-promises span{display:flex;align-items:center;gap:11px;color:#506b60;font-size:11px;line-height:1.45}.owner-access-promises b{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:#fff;color:var(--ink);font-size:9px;box-shadow:0 5px 18px rgba(23,63,53,.07)}
+.owner-access-card{width:100%;max-width:500px;justify-self:end;padding:38px;border:1px solid rgba(255,255,255,.8);border-radius:28px;background:rgba(255,255,255,.84);backdrop-filter:blur(16px);box-shadow:0 28px 80px rgba(23,63,53,.12)}
+.owner-access-lock{display:grid;place-items:center;width:52px;height:52px;margin-bottom:25px;border-radius:17px;background:var(--ink);color:#fff;font-family:var(--font-serif);font-size:27px}.owner-access-card h2{margin:10px 0 12px;font-family:var(--font-sans);font-size:30px;font-weight:850;letter-spacing:-.045em}.owner-access-help,.owner-access-note{color:#687e75;font-size:11px;line-height:1.6}.owner-access-error{margin:18px 0 0;padding:12px 14px;border-radius:12px;background:#f8e2d9;color:#873d2b;font-size:10px;font-weight:750;line-height:1.45}
+.owner-access-form{display:grid;gap:9px;margin-top:24px}.owner-access-form label{color:#60766d;font-size:9px;font-weight:850;text-transform:uppercase;letter-spacing:.1em}.owner-access-form input{width:100%;height:52px;border:1px solid var(--line);border-radius:14px;background:#fff;color:var(--ink);padding:0 15px;outline:none}.owner-access-form input:focus{border-color:#4d8b70;box-shadow:0 0 0 4px rgba(77,139,112,.12)}.owner-access-form .button{width:100%;margin-top:4px}.owner-access-note{margin:17px 0 0;text-align:center}.owner-access-home{font-size:12px}
+@media(max-width:900px){.owner-access-shell{grid-template-columns:1fr;gap:40px}.owner-access-card{max-width:none;justify-self:stretch}.owner-access-copy>p{max-width:none}}
+@media(max-width:600px){.owner-access-shell{min-height:auto;padding-block:35px 65px;gap:28px}.owner-access-copy h1{font-size:52px;margin:22px 0}.owner-access-copy>p{font-size:15px}.owner-access-promises{margin-top:22px}.owner-access-card{padding:27px 20px;border-radius:22px}.owner-access-card h2{font-size:26px}.owner-access-home{font-size:10px}}
+
 /* Security V1: account-owned rooms, one-time device pairing, and revocation. */
 .security-account{display:flex;align-items:center;gap:14px}.security-account span{max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#698078;font-size:10px}
 .security-promise{display:grid;gap:9px;margin-top:25px;padding:18px;border:1px solid rgba(72,115,95,.18);border-radius:18px;background:rgba(219,234,221,.66)}

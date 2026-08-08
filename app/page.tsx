@@ -22,7 +22,7 @@ export default function Home() {
           <h1>See what happens<br /><em>after you leave.</em></h1>
           <p className="hero-lede">Pawly turns spare phones, tablets, and computers into private AI cameras that follow your dog or cat, notice meaningful movement and sound, and give you a useful recap.</p>
           <div className="hero-actions">
-            <Link className="button button-primary" href="/setup">Set up a spare device <span aria-hidden="true">→</span></Link>
+            <Link className="button button-primary" href="/setup">Set up Pawly <span aria-hidden="true">→</span></Link>
             <a className="text-link" href="#how">See how it works</a>
           </div>
           <p className="microcopy">Live when you want it. Local detection the rest of the time. No continuous recording.</p>
