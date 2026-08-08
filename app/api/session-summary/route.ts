@@ -31,7 +31,13 @@ export async function POST(request: Request) {
   }
   const fallback = summarizeWithRules(parsed.data.events, parsed.data.startedAt, Date.now(), parsed.data.targetMinutes, parsed.data.sessionKind);
 
-  if (process.env.AI_FEATURE_ENABLED !== "true" || !process.env.OPENAI_API_KEY) return NextResponse.json(fallback, { headers: noStoreHeaders() });
+  if (process.env.AI_FEATURE_ENABLED !== "true" || !process.env.OPENAI_API_KEY) {
+    console.info("Pawly AI summary using rules", {
+      featureEnabled: process.env.AI_FEATURE_ENABLED === "true",
+      apiKeyConfigured: Boolean(process.env.OPENAI_API_KEY),
+    });
+    return NextResponse.json(fallback, { headers: noStoreHeaders() });
+  }
 
   const dailyLimit = Number(process.env.AI_DAILY_REQUEST_LIMIT ?? 20);
   const monthlyBudget = Number(process.env.AI_MONTHLY_BUDGET_USD ?? 5);
