@@ -74,9 +74,10 @@ export async function POST(request: Request) {
     await logAccess(room.id, "owner", user.email, "ai_summary_created");
     return NextResponse.json({ ...fallback, ...result, source: "openai", estimatedAiCostUsd }, { headers: noStoreHeaders() });
   } catch (error) {
+    const debugMessage = error instanceof Error ? error.message.slice(0, 180) : "Unknown AI summary failure";
     console.error("Pawly AI summary failed", error instanceof Error
       ? { name: error.name, message: error.message }
       : { name: "UnknownError", message: "Unknown AI summary failure" });
-    return NextResponse.json({ ...fallback, aiStatus: "provider_error" }, { headers: noStoreHeaders() });
+    return NextResponse.json({ ...fallback, aiStatus: "provider_error", aiDebugMessage: debugMessage }, { headers: noStoreHeaders() });
   }
 }
