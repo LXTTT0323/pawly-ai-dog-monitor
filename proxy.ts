@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const ACCESS_COOKIE = "__Host-pawly_vercel_owner";
-const OWNER_EMAIL = "vercel-owner@pawly.beta";
 
 export async function proxy(request: NextRequest) {
   if (process.env.VERCEL !== "1") return NextResponse.next();
 
   const accessKey = process.env.PAWLY_VERCEL_ACCESS_KEY;
   const bridgeSecret = process.env.PAWLY_VERCEL_BRIDGE_SECRET;
-  if (!accessKey || !bridgeSecret) {
+  const ownerEmail = process.env.PAWLY_VERCEL_OWNER_EMAIL?.trim().toLowerCase();
+  const ownerName = process.env.PAWLY_VERCEL_OWNER_NAME?.trim() || "Pawly owner";
+  if (!accessKey || !bridgeSecret || !ownerEmail) {
     return new NextResponse("Pawly owner access is not configured.", { status: 503 });
   }
 
@@ -42,13 +43,15 @@ export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.delete("x-pawly-vercel-bridge");
   requestHeaders.delete("x-pawly-owner-id");
+  requestHeaders.delete("x-pawly-owner-name");
   requestHeaders.delete("oai-authenticated-user-email");
   requestHeaders.delete("oai-authenticated-user-full-name");
   requestHeaders.delete("oai-authenticated-user-full-name-encoding");
 
   if (isOwner) {
     requestHeaders.set("x-pawly-vercel-bridge", bridgeSecret);
-    requestHeaders.set("x-pawly-owner-id", OWNER_EMAIL);
+    requestHeaders.set("x-pawly-owner-id", ownerEmail);
+    requestHeaders.set("x-pawly-owner-name", encodeURIComponent(ownerName));
   }
 
   return NextResponse.next({ request: { headers: requestHeaders } });

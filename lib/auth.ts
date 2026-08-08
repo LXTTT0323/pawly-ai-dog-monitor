@@ -21,11 +21,13 @@ export async function getPawlyUser(): Promise<PawlyUser | null> {
     return { email, displayName };
   }
   const bridgeSecret = process.env.PAWLY_VERCEL_BRIDGE_SECRET;
+  const configuredBridgeOwner = process.env.PAWLY_VERCEL_OWNER_EMAIL?.trim().toLowerCase();
   const suppliedBridgeSecret = requestHeaders.get("x-pawly-vercel-bridge");
   if (bridgeSecret && suppliedBridgeSecret && safeEqual(bridgeSecret, suppliedBridgeSecret)) {
     const bridgedOwner = requestHeaders.get("x-pawly-owner-id")?.trim().toLowerCase();
-    if (bridgedOwner === "vercel-owner@pawly.beta") {
-      return { email: bridgedOwner, displayName: "Pawly beta owner" };
+    if (bridgedOwner && configuredBridgeOwner && safeEqual(configuredBridgeOwner, bridgedOwner)) {
+      const bridgedName = safeDecode(requestHeaders.get("x-pawly-owner-name") ?? "");
+      return { email: bridgedOwner, displayName: bridgedName || "Pawly owner" };
     }
   }
   if (process.env.NODE_ENV !== "production") {
