@@ -28,6 +28,30 @@ interface PairingRecord {
   createdAt: number;
 }
 
+export interface GuestInviteRecord {
+  id: string;
+  roomId: string;
+  ownerEmail: string;
+  tokenHash: string;
+  expiresAt: number;
+  redeemedAt: number | null;
+  redeemedByEmail: string | null;
+  revokedAt: number | null;
+  createdAt: number;
+}
+
+export interface GuestAccessRecord {
+  id: string;
+  roomId: string;
+  guestInviteId: string;
+  guestIdentity: string;
+  guestEmail: string;
+  grantedAt: number;
+  expiresAt: number;
+  revokedAt: number | null;
+  lastSeenAt: number | null;
+}
+
 interface D1Statement {
   bind(...values: unknown[]): D1Statement;
   first<T = Record<string, unknown>>(): Promise<T | null>;
@@ -43,6 +67,8 @@ interface MemoryState {
   rooms: Map<string, RoomRecord>;
   devices: Map<string, DeviceRecord>;
   pairings: Map<string, PairingRecord>;
+  guestInvites: Map<string, GuestInviteRecord>;
+  guestAccess: Map<string, GuestAccessRecord>;
   rateLimits: Map<string, { windowStartedAt: number; count: number }>;
   logs: Array<{ roomId: string; actorType: string; actorId: string; action: string; createdAt: number }>;
 }
@@ -52,6 +78,8 @@ memory.pawlySecurityMemory ??= {
   rooms: new Map(),
   devices: new Map(),
   pairings: new Map(),
+  guestInvites: new Map(),
+  guestAccess: new Map(),
   rateLimits: new Map(),
   logs: [],
 };
@@ -138,6 +166,92 @@ export async function createPairingToken(room: RoomRecord) {
   }
   await logAccess(room.id, "owner", room.ownerEmail, "pairing_created");
   return { token: rawToken, expiresAt: record.expiresAt };
+}
+
+export async function createGuestInvite(room: RoomRecord, ownerEmail: string, durationHours = 24) {
+  const now = Date.now();
+  const rawToken = randomSecret();
+  const invite: GuestInviteRecord = {
+    id: crypto.randomUUID(), roomId: room.id, ownerEmail, tokenHash: await hashToken(rawToken),
+    expiresAt: now + Math.min(Math.max(durationHours, 1), 24 * 7) * 60 * 60 * 1000,
+    redeemedAt: null, redeemedByEmail: null, revokedAt: null, createdAt: now,
+  };
+  const db = await getDatabase();
+  if (!db) memory.pawlySecurityMemory!.guestInvites.set(invite.id, invite);
+  else await db.prepare(`INSERT INTO guest_invites (id, room_id, owner_email, token_hash, expires_at, redeemed_at, redeemed_by_email, revoked_at, created_at)
+    VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`)
+    .bind(invite.id, invite.roomId, invite.ownerEmail, invite.tokenHash, invite.expiresAt, invite.createdAt).run();
+  await logAccess(room.id, "owner", ownerEmail, "guest_invite_created");
+  return { id: invite.id, token: rawToken, expiresAt: invite.expiresAt };
+}
+
+export async function listGuestInvites(roomId: string) {
+  const now = Date.now();
+  const db = await getDatabase();
+  const invites = !db
+    ? [...memory.pawlySecurityMemory!.guestInvites.values()].filter((item) => item.roomId === roomId)
+    : (await db.prepare("SELECT id, room_id, owner_email, token_hash, expires_at, redeemed_at, redeemed_by_email, revoked_at, created_at FROM guest_invites WHERE room_id = ? ORDER BY created_at DESC")
+      .bind(roomId).all<Record<string, unknown>>()).results?.map(mapGuestInvite) ?? [];
+  return invites.filter((item) => item.expiresAt > now && item.revokedAt === null);
+}
+
+export async function revokeGuestInvite(roomId: string, inviteId: string) {
+  const now = Date.now();
+  const db = await getDatabase();
+  if (!db) {
+    const invite = memory.pawlySecurityMemory!.guestInvites.get(inviteId);
+    if (!invite || invite.roomId !== roomId || invite.revokedAt) return false;
+    invite.revokedAt = now;
+    for (const access of memory.pawlySecurityMemory!.guestAccess.values()) if (access.guestInviteId === inviteId) access.revokedAt = now;
+    return true;
+  }
+  const changed = await db.prepare("UPDATE guest_invites SET revoked_at = ? WHERE id = ? AND room_id = ? AND revoked_at IS NULL")
+    .bind(now, inviteId, roomId).run();
+  if (changed.meta?.changes) await db.prepare("UPDATE guest_access SET revoked_at = ? WHERE guest_invite_id = ? AND revoked_at IS NULL").bind(now, inviteId).run();
+  return Boolean(changed.meta?.changes);
+}
+
+export async function redeemGuestInvite(rawToken: string, guestIdentity: string, guestEmail: string) {
+  const now = Date.now();
+  const hash = await hashToken(rawToken);
+  const db = await getDatabase();
+  let invite: GuestInviteRecord | null = null;
+  if (!db) {
+    invite = [...memory.pawlySecurityMemory!.guestInvites.values()].find((item) => item.tokenHash === hash && !item.redeemedAt && !item.revokedAt && item.expiresAt > now) ?? null;
+    if (invite) { invite.redeemedAt = now; invite.redeemedByEmail = guestEmail; }
+  } else {
+    const row = await db.prepare("SELECT id, room_id, owner_email, token_hash, expires_at, redeemed_at, redeemed_by_email, revoked_at, created_at FROM guest_invites WHERE token_hash = ? AND redeemed_at IS NULL AND revoked_at IS NULL AND expires_at > ?")
+      .bind(hash, now).first<Record<string, unknown>>();
+    invite = row ? mapGuestInvite(row) : null;
+    if (invite) {
+      const result = await db.prepare("UPDATE guest_invites SET redeemed_at = ?, redeemed_by_email = ? WHERE id = ? AND redeemed_at IS NULL AND revoked_at IS NULL")
+        .bind(now, guestEmail, invite.id).run();
+      if (!result.meta?.changes) invite = null;
+    }
+  }
+  if (!invite) return null;
+  const access: GuestAccessRecord = { id: crypto.randomUUID(), roomId: invite.roomId, guestInviteId: invite.id, guestIdentity, guestEmail, grantedAt: now, expiresAt: invite.expiresAt, revokedAt: null, lastSeenAt: null };
+  if (!db) memory.pawlySecurityMemory!.guestAccess.set(`${access.roomId}:${access.guestIdentity}`, access);
+  else await db.prepare(`INSERT INTO guest_access (id, room_id, guest_invite_id, guest_identity, guest_email, granted_at, expires_at, revoked_at, last_seen_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+    ON CONFLICT(room_id, guest_identity) DO UPDATE SET guest_invite_id = excluded.guest_invite_id, guest_email = excluded.guest_email, granted_at = excluded.granted_at, expires_at = excluded.expires_at, revoked_at = NULL`)
+    .bind(access.id, access.roomId, access.guestInviteId, access.guestIdentity, access.guestEmail, access.grantedAt, access.expiresAt).run();
+  await logAccess(invite.roomId, "guest", guestIdentity, "guest_invite_redeemed");
+  return { room: await getRoomById(invite.roomId), expiresAt: invite.expiresAt };
+}
+
+export async function getGuestAccess(roomCode: string, guestIdentity: string) {
+  const room = await getRoomByCode(roomCode);
+  if (!room) return null;
+  const now = Date.now();
+  const db = await getDatabase();
+  const access = !db
+    ? memory.pawlySecurityMemory!.guestAccess.get(`${room.id}:${guestIdentity}`) ?? null
+    : await db.prepare("SELECT id, room_id, guest_invite_id, guest_identity, guest_email, granted_at, expires_at, revoked_at, last_seen_at FROM guest_access WHERE room_id = ? AND guest_identity = ? AND revoked_at IS NULL AND expires_at > ?")
+      .bind(room.id, guestIdentity, now).first<Record<string, unknown>>().then((row) => row ? mapGuestAccess(row) : null);
+  if (!access || access.revokedAt || access.expiresAt <= now) return null;
+  if (db) await db.prepare("UPDATE guest_access SET last_seen_at = ? WHERE id = ?").bind(now, access.id).run();
+  return { room, access };
 }
 
 export async function pairDevice(rawToken: string, name: string): Promise<{ room: RoomRecord; device: DeviceRecord; deviceToken: string } | null> {
@@ -346,4 +460,12 @@ function mapPairing(row: Record<string, unknown>): PairingRecord {
     usedAt: row.used_at === null || row.used_at === undefined ? null : Number(row.used_at),
     createdAt: Number(row.created_at),
   };
+}
+
+function mapGuestInvite(row: Record<string, unknown>): GuestInviteRecord {
+  return { id: String(row.id), roomId: String(row.room_id), ownerEmail: String(row.owner_email), tokenHash: String(row.token_hash), expiresAt: Number(row.expires_at), redeemedAt: row.redeemed_at == null ? null : Number(row.redeemed_at), redeemedByEmail: row.redeemed_by_email == null ? null : String(row.redeemed_by_email), revokedAt: row.revoked_at == null ? null : Number(row.revoked_at), createdAt: Number(row.created_at) };
+}
+
+function mapGuestAccess(row: Record<string, unknown>): GuestAccessRecord {
+  return { id: String(row.id), roomId: String(row.room_id), guestInviteId: String(row.guest_invite_id), guestIdentity: String(row.guest_identity), guestEmail: String(row.guest_email), grantedAt: Number(row.granted_at), expiresAt: Number(row.expires_at), revokedAt: row.revoked_at == null ? null : Number(row.revoked_at), lastSeenAt: row.last_seen_at == null ? null : Number(row.last_seen_at) };
 }

@@ -4,8 +4,11 @@ import { redirect } from "next/navigation";
 export interface PawlyUser {
   email: string;
   displayName: string;
+  /** Stable platform identity when Pawly is hosted on Sites. */
+  id: string;
 }
 
+const ID_HEADER = "oai-authenticated-user-id";
 const EMAIL_HEADER = "oai-authenticated-user-email";
 const NAME_HEADER = "oai-authenticated-user-full-name";
 const NAME_ENCODING_HEADER = "oai-authenticated-user-full-name-encoding";
@@ -18,7 +21,7 @@ export async function getPawlyUser(): Promise<PawlyUser | null> {
     const displayName = encodedName && requestHeaders.get(NAME_ENCODING_HEADER) === "percent-encoded-utf-8"
       ? safeDecode(encodedName) ?? email
       : email;
-    return { email, displayName };
+    return { email, displayName, id: requestHeaders.get(ID_HEADER)?.trim() || email };
   }
   const bridgeSecret = process.env.PAWLY_VERCEL_BRIDGE_SECRET;
   const configuredBridgeOwner = process.env.PAWLY_VERCEL_OWNER_EMAIL?.trim().toLowerCase();
@@ -27,12 +30,12 @@ export async function getPawlyUser(): Promise<PawlyUser | null> {
     const bridgedOwner = requestHeaders.get("x-pawly-owner-id")?.trim().toLowerCase();
     if (bridgedOwner && configuredBridgeOwner && safeEqual(configuredBridgeOwner, bridgedOwner)) {
       const bridgedName = safeDecode(requestHeaders.get("x-pawly-owner-name") ?? "");
-      return { email: bridgedOwner, displayName: bridgedName || "Pawly owner" };
+      return { email: bridgedOwner, displayName: bridgedName || "Pawly owner", id: bridgedOwner };
     }
   }
   if (process.env.NODE_ENV !== "production") {
     const localEmail = (process.env.PAWLY_LOCAL_OWNER_EMAIL ?? "owner@pawly.local").trim().toLowerCase();
-    return { email: localEmail, displayName: "Local owner" };
+    return { email: localEmail, displayName: "Local owner", id: localEmail };
   }
   return null;
 }

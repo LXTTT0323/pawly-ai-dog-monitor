@@ -5,13 +5,13 @@ import { z } from "zod";
 import { getPawlyUser } from "@/lib/auth";
 import { isRoomCode } from "@/lib/domain";
 import { assertSameOrigin, noStoreHeaders } from "@/lib/request-security";
-import { consumeRateLimit, decryptRoomKey, getRoomByCode, logAccess, verifyDevice } from "@/lib/security-store";
+import { consumeRateLimit, decryptRoomKey, getGuestAccess, getRoomByCode, logAccess, verifyDevice } from "@/lib/security-store";
 
 export const runtime = "nodejs";
 
 const requestSchema = z.object({
   roomCode: z.string().transform((value) => value.toUpperCase()).refine(isRoomCode),
-  mode: z.enum(["camera", "owner"]),
+  mode: z.enum(["camera", "owner", "guest"]),
 });
 
 export async function POST(request: Request) {
@@ -48,6 +48,15 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Too many connection attempts" }, { status: 429, headers: noStoreHeaders() });
       }
       await logAccess(room.id, "owner", user.email, "viewer_token_issued");
+    } else if (mode === "guest") {
+      const user = await getPawlyUser();
+      const guest = user ? await getGuestAccess(roomCode, user.id) : null;
+      if (!user || !guest) return NextResponse.json({ error: "This viewer account does not have access to this room" }, { status: 401, headers: noStoreHeaders() });
+      const guestId = await shortHash(user.id);
+      identity = `guest-${guestId}-${crypto.randomUUID().slice(0, 8)}`;
+      metadata = { role: "guest", roomId: room.id, guestId };
+      if (!await consumeRateLimit(`livekit:guest:${user.id}`, 30, 10 * 60 * 1000)) return NextResponse.json({ error: "Too many connection attempts" }, { status: 429, headers: noStoreHeaders() });
+      await logAccess(room.id, "guest", user.id, "viewer_token_issued");
     } else {
       const deviceToken = (await cookies()).get(deviceCookieName())?.value;
       const verified = deviceToken ? await verifyDevice(deviceToken, roomCode) : null;
@@ -67,7 +76,7 @@ export async function POST(request: Request) {
     token.addGrant({
       roomJoin: true,
       room: `pawly-${room.id}`,
-      canPublishSources: mode === "camera" ? [TrackSource.CAMERA, TrackSource.MICROPHONE] : [TrackSource.MICROPHONE],
+      canPublishSources: mode === "camera" ? [TrackSource.CAMERA, TrackSource.MICROPHONE] : mode === "owner" ? [TrackSource.MICROPHONE] : [],
       canSubscribe: true,
       canPublishData: true,
     });

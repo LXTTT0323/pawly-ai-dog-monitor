@@ -16,6 +16,7 @@ interface RoomResponse {
   room: { code: string; createdAt: number } | null;
   devices: Device[];
 }
+interface GuestInvite { id: string; expiresAt: number; redeemedAt: number | null; redeemedByEmail: string | null; }
 
 interface PetProfile {
   id: string;
@@ -70,6 +71,10 @@ export function SetupClient({ user }: { user: PawlyUser }) {
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const [pendingDeletePetId, setPendingDeletePetId] = useState<string | null>(null);
   const [deletingPetId, setDeletingPetId] = useState<string | null>(null);
+  const [guestInvites, setGuestInvites] = useState<GuestInvite[]>([]);
+  const [guestLink, setGuestLink] = useState<string | null>(null);
+  const [guestHours, setGuestHours] = useState(24);
+  const [guestBusy, setGuestBusy] = useState(false);
 
   const loadRoom = useCallback(async () => {
     setStatus("loading");
@@ -84,6 +89,8 @@ export function SetupClient({ user }: { user: PawlyUser }) {
       if (!response.ok || !data.room) throw new Error(data.error ?? "Could not open your room");
       setRoom(data.room);
       setDevices(data.devices ?? []);
+      const inviteResponse = await fetch(`/api/rooms/${data.room.code}/guest-invites`, { cache: "no-store" });
+      if (inviteResponse.ok) setGuestInvites((await inviteResponse.json() as { invites?: GuestInvite[] }).invites ?? []);
       const profileResponse = await fetch("/api/profile", { cache: "no-store" });
       if (profileResponse.ok) {
         const profile = await profileResponse.json() as { pets?: PetProfile[] };
@@ -136,6 +143,28 @@ export function SetupClient({ user }: { user: PawlyUser }) {
     if (response.ok) setDevices((current) => current.filter((device) => device.id !== deviceId));
     else setError((await response.json()).error ?? "Could not remove this device");
     setRevoking(null);
+  }
+
+  async function createGuestLink() {
+    if (!room) return;
+    setGuestBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/rooms/${room.code}/guest-invites`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ durationHours: guestHours }) });
+      const data = await response.json() as { invite?: { id: string; expiresAt: number; url: string }; error?: string };
+      if (!response.ok || !data.invite) throw new Error(data.error ?? "Could not create a guest link");
+      setGuestLink(data.invite.url);
+      setGuestInvites((current) => [{ id: data.invite!.id, expiresAt: data.invite!.expiresAt, redeemedAt: null, redeemedByEmail: null }, ...current]);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create a guest link"); } finally { setGuestBusy(false); }
+  }
+
+  async function revokeGuestInvite(id: string) {
+    if (!room) return;
+    setGuestBusy(true);
+    try {
+      const response = await fetch(`/api/rooms/${room.code}/guest-invites/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Could not revoke guest link");
+      setGuestInvites((current) => current.filter((invite) => invite.id !== id));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not revoke guest link"); } finally { setGuestBusy(false); }
   }
 
   function selectPet(pet: PetProfile) {
@@ -425,6 +454,22 @@ export function SetupClient({ user }: { user: PawlyUser }) {
                   </div>)}
                 </div>}
                 <p className="privacy-footnote">Already paired? Reopen the same Pawly camera page or Home Screen shortcut—no new link needed. Create another link only for a new browser/device, after clearing browser data, or after removing a device here.</p>
+              </div>
+            </div>
+
+            <div className="divider" />
+
+            <div className="setup-step">
+              <span>4</span>
+              <div className="guest-access-section">
+                <h2>Invite a guest viewer</h2>
+                <p>Guests must sign in with their own account. They can watch live video only—never move the camera, play sound, see setup, or change your room.</p>
+                <div className="guest-invite-controls">
+                  <label>Access lasts<select value={guestHours} onChange={(event) => setGuestHours(Number(event.target.value))}><option value={1}>1 hour</option><option value={24}>24 hours</option><option value={168}>7 days</option></select></label>
+                  <button className="button button-primary" type="button" disabled={guestBusy} onClick={() => void createGuestLink()}>{guestBusy ? "Creating…" : "Create guest link"}</button>
+                </div>
+                {guestLink && <div className="pairing-card"><div><strong>Private guest link ready</strong><span>Requires sign-in</span></div><div className="button-row"><button className="button button-dark" type="button" onClick={() => void navigator.clipboard.writeText(guestLink)}>Copy guest link</button></div><small>For privacy, this single-use link expires automatically. You can revoke it at any time.</small></div>}
+                {guestInvites.length > 0 && <div className="guest-invite-list">{guestInvites.map((invite) => <div className="device-row" key={invite.id}><div><strong>{invite.redeemedByEmail ? `Shared with ${invite.redeemedByEmail}` : "Awaiting guest"}</strong><span>Expires {new Date(invite.expiresAt).toLocaleString()}</span></div><button type="button" disabled={guestBusy} onClick={() => void revokeGuestInvite(invite.id)}>Revoke</button></div>)}</div>}
               </div>
             </div>
           </>}

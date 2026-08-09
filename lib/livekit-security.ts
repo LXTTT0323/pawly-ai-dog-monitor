@@ -15,11 +15,11 @@ export async function createEncryptedRoom(e2eeKey: string, options: ConstructorP
   };
 }
 
-export function participantRole(participant?: Participant | null): "owner" | "camera" | null {
+export function participantRole(participant?: Participant | null): "owner" | "camera" | "guest" | null {
   if (!participant?.metadata) return null;
   try {
     const metadata = JSON.parse(participant.metadata) as { role?: string };
-    return metadata.role === "owner" || metadata.role === "camera" ? metadata.role : null;
+    return metadata.role === "owner" || metadata.role === "camera" || metadata.role === "guest" ? metadata.role : null;
   } catch {
     return null;
   }

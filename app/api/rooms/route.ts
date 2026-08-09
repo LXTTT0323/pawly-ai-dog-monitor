@@ -2,12 +2,14 @@ import { NextResponse } from "next/server";
 import { getPawlyUser } from "@/lib/auth";
 import { assertSameOrigin, noStoreHeaders, SecurityError } from "@/lib/request-security";
 import { createOwnedRoom, getOwnedRoom, listDevices } from "@/lib/security-store";
+import { upsertUser } from "@/lib/profile-store";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   const user = await getPawlyUser();
   if (!user) return NextResponse.json({ error: "Sign in to manage your room" }, { status: 401, headers: noStoreHeaders() });
+  await upsertUser(user.email, user.displayName);
   const room = await getOwnedRoom(user.email);
   const devices = room ? await listDevices(room.id) : [];
   return NextResponse.json({
@@ -22,6 +24,7 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const user = await getPawlyUser();
     if (!user) return NextResponse.json({ error: "Sign in to create a room" }, { status: 401, headers: noStoreHeaders() });
+    await upsertUser(user.email, user.displayName);
     const room = await createOwnedRoom(user.email, user.displayName);
     const devices = await listDevices(room.id);
     return NextResponse.json({
