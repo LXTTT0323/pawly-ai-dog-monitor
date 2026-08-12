@@ -3,17 +3,6 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
-  async rewrites() {
-    if (process.env.VERCEL !== "1") return [];
-    return {
-      beforeFiles: [
-        {
-          source: "/api/:path*",
-          destination: "https://pawly-coach-beta.lxttt.chatgpt.site/api/:path*",
-        },
-      ],
-    };
-  },
   async headers() {
     return [
       {

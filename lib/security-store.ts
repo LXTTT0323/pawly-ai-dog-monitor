@@ -275,6 +275,16 @@ export async function pairDevice(rawToken: string, name: string): Promise<{ room
   if (!pairing) return null;
   const room = await getRoomById(pairing.roomId);
   if (!room) return null;
+  return createDevice(room, name, "device_paired");
+}
+
+export async function registerOwnerDevice(room: RoomRecord, name: string): Promise<{ room: RoomRecord; device: DeviceRecord; deviceToken: string }> {
+  return createDevice(room, name, "device_registered_by_owner");
+}
+
+async function createDevice(room: RoomRecord, name: string, logAction: string): Promise<{ room: RoomRecord; device: DeviceRecord; deviceToken: string }> {
+  const now = Date.now();
+  const db = await getDatabase();
   const deviceToken = randomSecret();
   const device: DeviceRecord = {
     id: crypto.randomUUID(),
@@ -288,7 +298,7 @@ export async function pairDevice(rawToken: string, name: string): Promise<{ room
   if (!db) memory.pawlySecurityMemory!.devices.set(device.id, device);
   else await db.prepare("INSERT INTO devices (id, room_id, name, token_hash, created_at, last_seen_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)")
     .bind(device.id, device.roomId, device.name, device.tokenHash, device.createdAt, device.lastSeenAt).run();
-  await logAccess(room.id, "camera", device.id, "device_paired");
+  await logAccess(room.id, "camera", device.id, logAction);
   return { room, device, deviceToken };
 }
 
