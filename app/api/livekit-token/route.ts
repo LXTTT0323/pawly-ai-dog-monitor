@@ -5,13 +5,14 @@ import { z } from "zod";
 import { getPawlyUser } from "@/lib/auth";
 import { isRoomCode } from "@/lib/domain";
 import { assertSameOrigin, noStoreHeaders } from "@/lib/request-security";
-import { consumeRateLimit, decryptRoomKey, getGuestAccess, getRoomByCode, logAccess, verifyDevice } from "@/lib/security-store";
+import { consumeRateLimit, decryptRoomKey, getGuestAccess, getRoomByCode, logAccess, registerOwnerDevice, verifyDevice } from "@/lib/security-store";
 
 export const runtime = "nodejs";
 
 const requestSchema = z.object({
   roomCode: z.string().transform((value) => value.toUpperCase()).refine(isRoomCode),
   mode: z.enum(["camera", "owner", "guest"]),
+  deviceName: z.string().trim().min(1).max(60).optional(),
 });
 
 export async function POST(request: Request) {
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
     let identity: string;
     let metadata: Record<string, string>;
     let cameraDevice: { id: string; name: string } | null = null;
+    let newDeviceToken: string | null = null;
     if (mode === "owner") {
       const user = await getPawlyUser();
       if (!user || user.email !== room.ownerEmail) {
@@ -59,9 +61,15 @@ export async function POST(request: Request) {
       await logAccess(room.id, "guest", user.id, "viewer_token_issued");
     } else {
       const deviceToken = (await cookies()).get(deviceCookieName())?.value;
-      const verified = deviceToken ? await verifyDevice(deviceToken, roomCode) : null;
+      let verified = deviceToken ? await verifyDevice(deviceToken, roomCode) : null;
       if (!verified) {
-        return NextResponse.json({ error: "This camera is not paired. Ask the owner for a new pairing link." }, { status: 401, headers: noStoreHeaders() });
+        const user = await getPawlyUser();
+        if (!user || user.email !== room.ownerEmail) {
+          return NextResponse.json({ error: "Sign in with the room owner's account, or use a one-time pairing link for this camera." }, { status: 401, headers: noStoreHeaders() });
+        }
+        const registered = await registerOwnerDevice(room, parsed.data.deviceName ?? inferDeviceName(request.headers.get("user-agent") ?? ""));
+        verified = { room: registered.room, device: registered.device };
+        newDeviceToken = registered.deviceToken;
       }
       identity = `camera-${verified.device.id}`;
       metadata = { role: "camera", roomId: room.id, deviceId: verified.device.id, deviceName: verified.device.name };
@@ -80,13 +88,23 @@ export async function POST(request: Request) {
       canSubscribe: true,
       canPublishData: true,
     });
-    return NextResponse.json({
+    const response = NextResponse.json({
       token: await token.toJwt(),
       serverUrl,
       e2eeKey: await decryptRoomKey(room),
       role: mode,
       device: cameraDevice,
     }, { headers: noStoreHeaders() });
+    if (newDeviceToken) {
+      response.cookies.set(deviceCookieName(), newDeviceToken, {
+        httpOnly: true,
+        sameSite: "strict",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: 180 * 24 * 60 * 60,
+      });
+    }
+    return response;
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Secure room connection failed" }, { status: 403, headers: noStoreHeaders() });
   }
@@ -94,6 +112,13 @@ export async function POST(request: Request) {
 
 function deviceCookieName() {
   return process.env.NODE_ENV === "production" ? "__Host-pawly_device" : "pawly_device";
+}
+
+function inferDeviceName(userAgent: string) {
+  if (/iPad/i.test(userAgent) || (/Macintosh/i.test(userAgent) && /Mobile/i.test(userAgent))) return "iPad camera";
+  if (/iPhone/i.test(userAgent)) return "iPhone camera";
+  if (/Android/i.test(userAgent)) return "Android camera";
+  return "Computer camera";
 }
 
 async function shortHash(value: string) {

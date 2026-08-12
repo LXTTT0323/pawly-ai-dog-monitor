@@ -53,13 +53,14 @@ async function preparePetPhoto(file: File) {
   }
 }
 
-export function SetupClient({ user }: { user: PawlyUser }) {
+export function SetupClient({ user, signOutUrl }: { user: PawlyUser; signOutUrl: string }) {
   const [room, setRoom] = useState<RoomResponse["room"]>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
   const [pairing, setPairing] = useState<{ url: string; expiresAt: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [cameraLinkCopied, setCameraLinkCopied] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [pets, setPets] = useState<PetProfile[]>([]);
   const [selectedPetId, setSelectedPetId] = useState<string | null>(null);
@@ -134,6 +135,13 @@ export function SetupClient({ user }: { user: PawlyUser }) {
     await navigator.clipboard.writeText(pairing.url);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  async function copyCameraLink() {
+    if (!room) return;
+    await navigator.clipboard.writeText(`${window.location.origin}/camera?room=${room.code}`);
+    setCameraLinkCopied(true);
+    window.setTimeout(() => setCameraLinkCopied(false), 1800);
   }
 
   async function revoke(deviceId: string) {
@@ -324,7 +332,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
         <Brand />
         <div className="security-account">
           <span>{user.displayName}</span>
-          <a className="text-link" href="/signout-with-chatgpt?return_to=/">Sign out</a>
+          <a className="text-link" href={signOutUrl}>Sign out</a>
         </div>
       </nav>
 
@@ -336,7 +344,7 @@ export function SetupClient({ user }: { user: PawlyUser }) {
           <div className="security-promise">
             <strong>Protected by default</strong>
             <span>End-to-end encrypted live video</span>
-            <span>One-time camera pairing</span>
+            <span>Trusted devices reconnect automatically</span>
             <span>Revoke any device instantly</span>
           </div>
         </div>
@@ -416,17 +424,35 @@ export function SetupClient({ user }: { user: PawlyUser }) {
             <div className="setup-step">
               <span>1</span>
               <div>
-                <h2>{devices.length ? "Pair a new camera device" : "Pair your first camera device"}</h2>
-                <p>This is a one-time setup for each iPad, phone, or computer. After pairing, the same browser stays trusted for 180 days and can reconnect tomorrow without a new link.</p>
-                <button className="button button-primary" type="button" onClick={() => void createPairing()}>{devices.length ? "Create one-time link for a new device" : "Create one-time pairing link"}</button>
-                {pairing && <div className="pairing-card" role="status">
-                  <div><strong>Pairing link ready</strong><span>Valid for 15 minutes</span></div>
-                  <div className="button-row">
-                    <button className="button button-dark" onClick={() => void copyPairing()}>{copied ? "Link copied" : "Copy link"}</button>
-                    <a className="button button-ghost" href={pairing.url}>Open pairing page</a>
+                <h2>{devices.length ? "Reconnect a camera" : "Start your first camera"}</h2>
+                <p>Use the same Pawly camera address again. A trusted browser reconnects immediately; a browser signed in with this owner account registers itself securely on first use.</p>
+                <div className="camera-reconnect-card">
+                  <div>
+                    <strong>{devices.length ? `${devices.length} trusted camera${devices.length === 1 ? "" : "s"}` : "Ready on this owner account"}</strong>
+                    <span>No daily pairing link required</span>
                   </div>
-                  <small>Use this only on a new device or browser. Opening the link does not consume it; the device must tap “Approve & pair.”</small>
-                </div>}
+                  <div className="button-row">
+                    <a className="button button-primary" href={`/camera?room=${room.code}`}>Open camera on this device</a>
+                    <button className="button button-ghost" type="button" onClick={() => void copyCameraLink()}>{cameraLinkCopied ? "Camera address copied" : "Copy reusable camera address"}</button>
+                  </div>
+                  <small>On your usual iPad or computer, open this once and allow the camera. Pawly then auto-resumes when that saved page is reopened. Bookmark it or add it to the Home Screen.</small>
+                </div>
+
+                <details className="new-camera-details">
+                  <summary>Add a camera without signing in</summary>
+                  <div>
+                    <p>Use a one-time pairing link only for a new browser where you do not want to sign in with the owner account.</p>
+                    <button className="button button-dark" type="button" onClick={() => void createPairing()}>Create one-time pairing link</button>
+                    {pairing && <div className="pairing-card" role="status">
+                      <div><strong>Pairing link ready</strong><span>Valid for 15 minutes</span></div>
+                      <div className="button-row">
+                        <button className="button button-dark" onClick={() => void copyPairing()}>{copied ? "Link copied" : "Copy link"}</button>
+                        <a className="button button-ghost" href={pairing.url}>Open pairing page</a>
+                      </div>
+                      <small>Opening the link does not consume it. The camera device must tap Approve &amp; pair once.</small>
+                    </div>}
+                  </div>
+                </details>
               </div>
             </div>
 
@@ -446,14 +472,14 @@ export function SetupClient({ user }: { user: PawlyUser }) {
             <div className="setup-step">
               <span>3</span>
               <div className="paired-devices-section">
-                <h2>Camera devices ({devices.length})</h2>
+                <h2>Trusted camera devices ({devices.length})</h2>
                 {devices.length === 0 ? <p>No camera is paired yet.</p> : <div className="device-list">
                   {devices.map((device) => <div className="device-row" key={device.id}>
-                    <div><strong>{device.name}</strong><span>Last connected {new Date(device.lastSeenAt).toLocaleString()}</span></div>
+                    <div><strong>{device.name}</strong><span>Trusted · last connected {new Date(device.lastSeenAt).toLocaleString()}</span></div>
                     <button type="button" onClick={() => void revoke(device.id)} disabled={revoking === device.id}>{revoking === device.id ? "Removing…" : "Remove"}</button>
                   </div>)}
                 </div>}
-                <p className="privacy-footnote">Already paired? Reopen the same Pawly camera page or Home Screen shortcut—no new link needed. Create another link only for a new browser/device, after clearing browser data, or after removing a device here.</p>
+                <p className="privacy-footnote">These browsers can reopen the reusable camera address without another link. Removing one revokes its camera access immediately.</p>
               </div>
             </div>
 
