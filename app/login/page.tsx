@@ -18,9 +18,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <span className="eyebrow">One account · every camera</span>
         <h2>Your pets stay<br /><em>connected to you.</em></h2>
         <p>Use the same account on your phone, iPad, or computer. Previously trusted cameras reconnect without daily pairing links.</p>
-        <div className="login-promises"><span>Private room ownership</span><span>Trusted device controls</span><span>Secure email sign-in</span></div>
+        <div className="login-promises"><span>Private room ownership</span><span>Trusted device controls</span><span>Secure account access</span></div>
       </div>
-      {user ? <div className="login-card login-already"><span className="eyebrow">Already signed in</span><h1>Continue to Pawly.</h1><p>You are signed in as {user.email}.</p><Link className="button button-primary" href={nextPath}>Open my Pawly</Link></div> : <LoginCard configured={isSupabaseConfigured()} nextPath={nextPath} initialError={params.error === "expired_link" ? "That sign-in link is no longer valid. Request a new one below." : ""} />}
+      {user ? <div className="login-card login-already"><span className="eyebrow">Already signed in</span><h1>Continue to Pawly.</h1><p>You are signed in as {user.email}.</p><Link className="button button-primary" href={nextPath}>Open my Pawly</Link></div> : <LoginCard configured={isSupabaseConfigured()} nextPath={nextPath} initialError={params.error === "expired_link" ? "That older email link is no longer valid. Sign in with your password below." : ""} />}
     </section>
   </main>;
 }

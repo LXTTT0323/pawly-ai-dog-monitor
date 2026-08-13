@@ -28,10 +28,29 @@ type CameraFacing = "user" | "environment";
 
 function cameraErrorMessage(cause: unknown) {
   if (!(cause instanceof Error)) return "The camera could not start. Reload this page and try again.";
+  if (cause.name === "TimeoutError") return "The selected camera did not respond. Choose another camera above, close any app using it, then try again.";
   if (cause.name === "NotAllowedError") return "Camera access is blocked for this site. Open the browser's site settings, allow Camera, then try again.";
   if (cause.name === "NotFoundError") return "No usable camera was found on this device.";
   if (cause.name === "NotReadableError") return "The camera is busy in another app. Close FaceTime or other camera apps, then try again.";
   return cause.message || "The camera could not start. Reload this page and try again.";
+}
+
+async function getUserMediaWithTimeout(constraints: MediaStreamConstraints, timeoutMs = 12_000) {
+  let timedOut = false;
+  const request = navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+    if (timedOut) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw Object.assign(new Error("The camera request timed out."), { name: "TimeoutError" });
+    }
+    return stream;
+  });
+  const timeout = new Promise<never>((_, reject) => {
+    window.setTimeout(() => {
+      timedOut = true;
+      reject(Object.assign(new Error("The camera request timed out."), { name: "TimeoutError" }));
+    }, timeoutMs);
+  });
+  return Promise.race([request, timeout]);
 }
 
 function coverBoxStyle(box: DogBox, video: HTMLVideoElement | null): CSSProperties {
@@ -521,22 +540,25 @@ export function CameraStation({ roomCode }: Props) {
       const preferredAudioId = selectedAudioDeviceIdRef.current;
       const selectedVideoConstraints = videoCaptureConstraints(preferredVideoId, "environment");
       try {
-        preparedStream = await navigator.mediaDevices.getUserMedia({
+        preparedStream = await getUserMediaWithTimeout({
           video: selectedVideoConstraints,
           audio: audioCaptureConstraints(preferredAudioId),
         });
-      } catch {
+      } catch (firstCameraError) {
+        if (firstCameraError instanceof Error && firstCameraError.name === "TimeoutError") throw firstCameraError;
         try {
-          preparedStream = await navigator.mediaDevices.getUserMedia({ video: selectedVideoConstraints, audio: false });
-        } catch {
+          preparedStream = await getUserMediaWithTimeout({ video: selectedVideoConstraints, audio: false });
+        } catch (secondCameraError) {
+          if (secondCameraError instanceof Error && secondCameraError.name === "TimeoutError") throw secondCameraError;
           rememberMediaDevices("", preferredAudioId);
           try {
-            preparedStream = await navigator.mediaDevices.getUserMedia({
+            preparedStream = await getUserMediaWithTimeout({
               video: videoCaptureConstraints("", "environment"),
               audio: audioCaptureConstraints(preferredAudioId),
             });
-          } catch {
-            preparedStream = await navigator.mediaDevices.getUserMedia({
+          } catch (thirdCameraError) {
+            if (thirdCameraError instanceof Error && thirdCameraError.name === "TimeoutError") throw thirdCameraError;
+            preparedStream = await getUserMediaWithTimeout({
               video: videoCaptureConstraints("", "environment"),
               audio: false,
             });

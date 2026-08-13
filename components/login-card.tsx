@@ -3,46 +3,80 @@
 import { useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
+type Mode = "signin" | "signup";
+
 export function LoginCard({ configured, nextPath, initialError = "" }: { configured: boolean; nextPath: string; initialError?: string }) {
+  const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "sent">("idle");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
 
-  async function sendMagicLink(event: React.FormEvent<HTMLFormElement>) {
+  function switchMode(nextMode: Mode) {
+    setMode(nextMode);
+    setError("");
+  }
+
+  async function authenticate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!configured || !email.trim()) return;
-    setStatus("sending");
+    if (!configured || !email.trim() || password.length < 8) return;
+
+    setBusy(true);
     setError("");
     try {
-      const callback = new URL("/auth/callback", window.location.origin);
-      callback.searchParams.set("next", nextPath);
       const supabase = createSupabaseBrowserClient();
-      const { error: authError } = await supabase.auth.signInWithOtp({
-        email: email.trim().toLowerCase(),
-        options: { emailRedirectTo: callback.toString(), shouldCreateUser: true },
-      });
-      if (authError) throw authError;
-      setStatus("sent");
+      const credentials = { email: email.trim().toLowerCase(), password };
+      const result = mode === "signup"
+        ? await supabase.auth.signUp(credentials)
+        : await supabase.auth.signInWithPassword(credentials);
+
+      if (result.error) throw result.error;
+      if (!result.data.session) {
+        throw new Error("Your account was created, but email confirmation is still required. Please check your inbox.");
+      }
+
+      window.location.assign(nextPath);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "We could not send the sign-in email.");
-      setStatus("idle");
+      const message = cause instanceof Error ? cause.message : "We could not sign you in.";
+      setError(friendlyAuthError(message, mode));
+      setBusy(false);
     }
   }
 
   return <div className="login-card">
     <div className="login-lock" aria-hidden="true">P</div>
     <span className="eyebrow">Your private Pawly account</span>
-    <h1>Welcome home.</h1>
-    <p>Sign in to see your pets, trusted cameras, and private room from any of your devices.</p>
+    <h1>{mode === "signin" ? "Welcome home." : "Create your account."}</h1>
+    <p>{mode === "signin" ? "Sign in to see your pets, trusted cameras, and private room." : "Keep your pets and camera devices together in one private Pawly account."}</p>
 
-    {!configured ? <div className="login-notice" role="status"><strong>Email sign-in is ready in the app.</strong><span>Connect the Supabase project keys to turn it on for pawlycam.com.</span></div> : status === "sent" ? <div className="login-success" role="status"><strong>Check your email</strong><span>We sent a secure Pawly sign-in link to {email}. For this beta, open it in this same browser on this device.</span><button type="button" onClick={() => setStatus("idle")}>Use another email</button></div> : <>
-      <form className="login-form" onSubmit={sendMagicLink}>
+    {!configured ? <div className="login-notice" role="status"><strong>Account sign-in is ready in the app.</strong><span>Connect the Supabase project keys to turn it on for pawlycam.com.</span></div> : <>
+      <div className="login-mode" role="tablist" aria-label="Account access">
+        <button type="button" role="tab" aria-selected={mode === "signin"} className={mode === "signin" ? "active" : ""} onClick={() => switchMode("signin")}>Sign in</button>
+        <button type="button" role="tab" aria-selected={mode === "signup"} className={mode === "signup" ? "active" : ""} onClick={() => switchMode("signup")}>Create account</button>
+      </div>
+      <form className="login-form" onSubmit={authenticate}>
         <label htmlFor="pawly-email">Email address</label>
         <input id="pawly-email" type="email" autoComplete="email" inputMode="email" required placeholder="you@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
-        <button className="button button-primary" type="submit" disabled={status === "sending"}>{status === "sending" ? "Sending secure link…" : "Email me a sign-in link"}</button>
+        <label htmlFor="pawly-password">Password</label>
+        <div className="password-field">
+          <input id="pawly-password" type={showPassword ? "text" : "password"} autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={8} required placeholder="At least 8 characters" value={password} onChange={(event) => setPassword(event.target.value)} />
+          <button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? "Hide" : "Show"}</button>
+        </div>
+        <button className="button button-primary" type="submit" disabled={busy || password.length < 8}>{busy ? (mode === "signin" ? "Signing in..." : "Creating account...") : (mode === "signin" ? "Sign in" : "Create account")}</button>
       </form>
     </>}
     {error && <p className="error-text" role="alert">{error}</p>}
-    <small>No password to remember. Your email link is single-use, and camera connections are encrypted in transit.</small>
+    <small>No email-link wait or daily pairing. Your session stays securely saved on this device, and camera connections are encrypted in transit.</small>
   </div>;
+}
+
+function friendlyAuthError(message: string, mode: Mode) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid login credentials")) return "That email and password do not match. Try again or create a new account.";
+  if (normalized.includes("user already registered")) return "An account already exists for this email. Choose Sign in instead.";
+  if (normalized.includes("password should be")) return "Use a password with at least 8 characters.";
+  if (normalized.includes("rate limit")) return "Too many attempts. Please wait a moment and try again.";
+  if (mode === "signup" && normalized.includes("email confirmation")) return "Your account was created. Check your email once to confirm it, then sign in here.";
+  return message;
 }

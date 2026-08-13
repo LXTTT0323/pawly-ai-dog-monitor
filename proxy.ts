@@ -36,6 +36,20 @@ async function forwardApiRequest(request: NextRequest, user: { email?: string; u
   requestHeaders.delete("host");
   requestHeaders.delete("content-length");
 
+  const mutatingRequest = request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS";
+  const browserOrigin = request.headers.get("origin");
+  if (mutatingRequest && browserOrigin && browserOrigin !== request.nextUrl.origin) {
+    return NextResponse.json(
+      { error: "Cross-site request blocked" },
+      { status: 403, headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
+
+  // The browser-facing origin was checked above. The private bridge is a
+  // same-origin server-to-server request authenticated by its own secret.
+  requestHeaders.set("origin", SITES_ORIGIN);
+  requestHeaders.set("referer", `${SITES_ORIGIN}/`);
+
   const bridgeSecret = process.env.PAWLY_VERCEL_BRIDGE_SECRET;
   const email = user?.email?.trim().toLowerCase();
   if (bridgeSecret && email) {
@@ -45,15 +59,31 @@ async function forwardApiRequest(request: NextRequest, user: { email?: string; u
     requestHeaders.set("x-pawly-owner-name", encodeURIComponent(typeof fullName === "string" && fullName.trim() ? fullName.trim() : email.split("@")[0]));
   }
 
-  const upstream = await fetch(destination, {
-    method: request.method,
-    headers: requestHeaders,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-    redirect: "manual",
-  });
-  const upstreamHeaders = new Headers(upstream.headers);
-  upstreamHeaders.set("Cache-Control", "private, no-store");
-  return new NextResponse(upstream.body, { status: upstream.status, headers: upstreamHeaders });
+  try {
+    // Buffer the body before forwarding. Passing NextRequest.body directly can
+    // fail in Vercel's proxy runtime because the stream requires duplex mode.
+    const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
+    const upstream = await fetch(destination, {
+      method: request.method,
+      headers: requestHeaders,
+      body,
+      redirect: "manual",
+    });
+    const upstreamHeaders = new Headers(upstream.headers);
+    // fetch() transparently decodes compressed upstream responses. Forwarding
+    // the old encoding/length headers makes browsers reject the decoded body.
+    upstreamHeaders.delete("content-encoding");
+    upstreamHeaders.delete("content-length");
+    upstreamHeaders.delete("transfer-encoding");
+    upstreamHeaders.set("Cache-Control", "private, no-store");
+    return new NextResponse(upstream.body, { status: upstream.status, headers: upstreamHeaders });
+  } catch (cause) {
+    console.error("Pawly API bridge failed", cause);
+    return NextResponse.json(
+      { error: "Pawly could not reach its private data service. Please try again." },
+      { status: 502, headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
 }
 
 export const config = {
