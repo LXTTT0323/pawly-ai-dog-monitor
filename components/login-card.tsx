@@ -35,7 +35,7 @@ export function LoginCard({ configured, nextPath, initialError = "" }: { configu
     <h1>Welcome home.</h1>
     <p>Sign in to see your pets, trusted cameras, and private room from any of your devices.</p>
 
-    {!configured ? <div className="login-notice" role="status"><strong>Email sign-in is ready in the app.</strong><span>Connect the Supabase project keys to turn it on for pawlycam.com.</span></div> : status === "sent" ? <div className="login-success" role="status"><strong>Check your email</strong><span>We sent a secure Pawly sign-in link to {email}. You can close this page after opening it.</span><button type="button" onClick={() => setStatus("idle")}>Use another email</button></div> : <>
+    {!configured ? <div className="login-notice" role="status"><strong>Email sign-in is ready in the app.</strong><span>Connect the Supabase project keys to turn it on for pawlycam.com.</span></div> : status === "sent" ? <div className="login-success" role="status"><strong>Check your email</strong><span>We sent a secure Pawly sign-in link to {email}. For this beta, open it in this same browser on this device.</span><button type="button" onClick={() => setStatus("idle")}>Use another email</button></div> : <>
       <form className="login-form" onSubmit={sendMagicLink}>
         <label htmlFor="pawly-email">Email address</label>
         <input id="pawly-email" type="email" autoComplete="email" inputMode="email" required placeholder="you@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
